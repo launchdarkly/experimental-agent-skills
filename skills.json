@@ -1,0 +1,12 @@
+{
+  "skills": [
+    {
+      "name": "example",
+      "description": "This is an example skill.",
+      "path": "skills/example",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "compatibility": "All"
+    }
+  ]
+}
