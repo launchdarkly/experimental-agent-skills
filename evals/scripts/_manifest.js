@@ -47,9 +47,9 @@ const SUITES = [
   },
   {
     suite: "onboarding",
-    skillKey: "onboarding",
-    skillDir: "skills/onboarding",
-    readme: "skills/onboarding/README.md",
+    skillKey: "onboarding-scripted",
+    skillDir: "skills/onboarding-scripted",
+    readme: "skills/onboarding-scripted/README.md",
   },
 ];
 

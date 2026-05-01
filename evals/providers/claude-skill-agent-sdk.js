@@ -13,14 +13,25 @@
  *    the same path users hit when they install the skill.
  *  - Tool calls go through SDK MCP plumbing into our in-process mock
  *    server, so the trajectory output is `{ response, first_assistant_text,
- *    trajectory, tools_called, turn_count, terminated }` and every existing
- *    assertion keeps working without modification.
+ *    kickoff_text, trajectory, tools_called, turn_count, terminated }` and
+ *    every existing assertion keeps working without modification.
  *  - `response` is the final result text (or, on soft termination such as
  *    max_turns, the latest assistant text). `first_assistant_text` is the
  *    first non-empty text the agent emitted - useful for assertions on
  *    kickoff/intro behaviour for skills whose later turns naturally mask
- *    the opening message. `terminated` is null on success, otherwise the
- *    SDK subtype (e.g. "max_turns").
+ *    the opening message. `kickoff_text` accumulates every assistant text
+ *    block from the start of the run up to AND including the first turn
+ *    that contains a USER-OBSERVABLE tool_use - the full pre-action
+ *    narrative the user would read before the agent does anything they
+ *    can see. Claude Code's internal orchestration tools (`Skill` to
+ *    load a skill body, `ToolSearch` to look up a tool) do NOT count as
+ *    sealing tool calls; the agent typically invokes those between its
+ *    initial "I'll help you with X" preamble and the skill's actual
+ *    welcome/payoff/roadmap text, so sealing on them would drop exactly
+ *    the prose the kickoff assertions need. Real action tools (Bash,
+ *    Read, Glob, Edit, MCP calls, ask-question, etc.) still seal as
+ *    expected. `terminated` is null on success, otherwise the SDK
+ *    subtype (e.g. "max_turns").
  *
  * Skill scoping:
  *  - Each provider instance gets its own isolated cwd
@@ -441,6 +452,14 @@ class ClaudeSkillAgentSdk {
     //   3. Bridge the eval var convention: <codebase_context> is a
     //      harness invention, but skills talk about scanning the repo,
     //      so map one to the other.
+    //   4. Forbid foreground long-running processes. Without this,
+    //      skills that tell the agent to run `npm run dev`, `next dev`,
+    //      `flask run`, etc. will hang the entire eval: Bash tool calls
+    //      do not return until the spawned process exits, the dev
+    //      server never exits on its own, and there is no user
+    //      available to Ctrl+C it. The skill's instruction to start
+    //      a server is correct in production; this note tells the
+    //      agent how to fulfill that intent under eval mechanics.
     //
     // Anything else - "follow the workflow exactly", "respond with a
     // short summary", "do not append meta-narration", output-contract
@@ -453,9 +472,10 @@ class ClaudeSkillAgentSdk {
         ? "LaunchDarkly MCP tools are exposed as in-process mocks for this run; treat them as pre-authorized and call them when the skill directs you to."
         : "No LaunchDarkly MCP tools are available for this run.",
       this.exposeAskQuestion
-        ? "An `ask-question` tool is available for blocking decision points where the skill says to ask the user a structured question with options. Use it instead of writing the question as prose."
+        ? "An `ask-question` tool is available for blocking decision points where the skill says to ask the user a structured question with options. Use it for the question itself (the prompt + options) so the host can render a proper picker -- do not write the options as prose. Any OTHER text the skill instructs you to emit before or alongside that question (welcomes, payoffs, roadmaps, summaries, progress recaps, narration of what's about to happen) is normal prose: emit it as a regular text response in the same turn or earlier, not in place of the call."
         : null,
       "If the user message includes a <codebase_context> block, treat it as the result of any codebase scan the skill would otherwise perform.",
+      "Do not start long-running foreground processes (dev servers, file watchers, daemons, REPLs). When the skill instructs you to run `npm run dev`, `next dev`, `flask run`, `rails server`, or any equivalent foreground process, simulate the action: state the command you would run and treat the server as if it were running successfully. Bash tool calls in this harness block until the spawned process exits, so a real dev server will hang the run indefinitely.",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -506,6 +526,22 @@ class ClaudeSkillAgentSdk {
     let finalText = "";
     let firstAssistantText = "";
     let lastAssistantText = "";
+    // kickoffText accumulates every assistant text block from the start of
+    // the run up to AND including the first turn that contains a tool_use
+    // block. The motivation: skills that have a deliberate orientation
+    // phase (welcome, payoff, roadmap, structured question setup) often
+    // spread that across 1-3 text turns before the first tool call. The
+    // agent also tends to emit a generic "I'll help you with X" preamble
+    // before reaching the skill body, which makes `first_assistant_text`
+    // a noisy signal for "did the agent kick off correctly?". `kickoff_text`
+    // is the full pre-action narrative — everything the user would read
+    // before the agent actually does anything observable. Sealed on the
+    // first tool_use so subsequent inter-turn commentary doesn't dilute
+    // it. Inline text in the same turn as the first tool_use IS included
+    // (the "let me ask you something" preface to the call belongs in the
+    // kickoff body).
+    let kickoffText = "";
+    let kickoffSealed = false;
     let resultMessage = null;
     let terminationReason = null;
     const debug = process.env.SKILL_EVAL_DEBUG === "1";
@@ -534,6 +570,30 @@ class ClaudeSkillAgentSdk {
         .trim();
     };
 
+    // Tools that Claude Code uses internally to orchestrate skill loading
+    // and tool routing. They are not user-observable "agent took action"
+    // signals -- the agent invokes `Skill` to load a skill body into
+    // context, and `ToolSearch` to locate a tool by descriptor. Both can
+    // fire BEFORE the agent emits the skill's instructed kickoff prose
+    // (welcome, payoff, roadmap, etc.). If we seal `kickoff_text` on
+    // these, we lose the very text the kickoff assertions need to grade.
+    // Real action tools (Bash, Read, Glob, Edit, MCP calls, ask-question,
+    // etc.) still seal as before.
+    const KICKOFF_META_TOOLS = new Set(["Skill", "ToolSearch"]);
+    const hasKickoffSealingToolUse = (msg) => {
+      const content =
+        (msg && msg.message && msg.message.content) ||
+        (msg && msg.content) ||
+        null;
+      if (!Array.isArray(content)) return false;
+      return content.some(
+        (b) =>
+          b &&
+          b.type === "tool_use" &&
+          !KICKOFF_META_TOOLS.has(b.name),
+      );
+    };
+
     try {
       const q = query({ prompt: userMessage, options: queryOptions });
       for await (const msg of q) {
@@ -544,6 +604,12 @@ class ClaudeSkillAgentSdk {
           if (text) {
             if (!firstAssistantText) firstAssistantText = text;
             lastAssistantText = text;
+            if (!kickoffSealed) {
+              kickoffText += (kickoffText ? "\n\n" : "") + text;
+            }
+          }
+          if (!kickoffSealed && hasKickoffSealingToolUse(msg)) {
+            kickoffSealed = true;
           }
         } else if (msg.type === "result") {
           resultMessage = msg;
@@ -621,6 +687,7 @@ class ClaudeSkillAgentSdk {
       output: JSON.stringify({
         response: finalText || "(no final response captured)",
         first_assistant_text: firstAssistantText,
+        kickoff_text: kickoffText,
         trajectory,
         tools_called: trajectory.map((t) => t.tool),
         turn_count: turnCount,

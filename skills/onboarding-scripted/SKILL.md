@@ -96,9 +96,9 @@ Both modes enforce the same outcomes: MCP connected, SDK installed, first flag e
 If the user says "continue onboarding" — a restart just happened after MCP configuration. Do not ask what was happening. Re-detect state silently and resume from the right step.
 
 **Re-survey in order:**
-1. **MCP** — tell the user before probing: "I'll check if MCP is still connected." Then attempt a LaunchDarkly MCP tool call (e.g., list environments or projects). Success = MCP is live. Failure = MCP setup incomplete.
-2. **SDK** — scan dependency files for a LaunchDarkly SDK package. Check for initialization code in the codebase.
-3. **Flag** — check for `variation()` or equivalent flag evaluation calls in the codebase.
+1. **MCP** — tell the user before probing: "I'll check if MCP is still connected." Then attempt a LaunchDarkly MCP tool call (e.g., list environments or projects). When the call succeeds, immediately say so out loud in a user-facing line — for example "MCP is connected." or "MCP is live — moving on." Do not silently proceed; the user needs to see that the probe succeeded. Failure = MCP setup incomplete.
+2. **SDK** — scan dependency files for a LaunchDarkly SDK package. Check for initialization code in the codebase. When found, name the package and the init file in one line ("SDK is installed — `@launchdarkly/node-server-sdk` initialized in `src/launchdarkly.js`.") so the recap below has something to point at.
+3. **Flag** — check for `variation()` or equivalent flag evaluation calls in the codebase. When the search returns nothing, say so explicitly ("No flags evaluating yet — that's the next step.") rather than skipping silently.
 
 **Resume rules (first incomplete step wins):**
 - MCP probe failed for any reason (401, error, timeout) → hand off to `mcp-configure` to resolve it. Do not attempt to fix auth here — that is mcp-configure's job.
@@ -162,20 +162,23 @@ Open by telling the user you're going to take stock of their setup before touchi
 
 | State | Criteria | Action |
 |---|---|---|
-| **Clear app** | Language detected, real entrypoint exists, dependency manifest present | Continue |
-| **Unclear** | Stray or minimal manifest, no source files, conflicting signals | Use the `AskQuestion` form below (unclear variant) |
+| **Clear app** | Single language detected, real entrypoint exists, exactly one dependency manifest at the obvious location | Continue |
+| **Unclear** | Stray or minimal manifest, no source files, conflicting signals, **OR** a multi-package workspace (yarn/pnpm/npm workspaces, lerna, nx, turborepo, gradle multi-project, cargo workspace, go workspace) where more than one package could plausibly host LaunchDarkly | Use the `AskQuestion` form below (unclear variant) |
 | **No app found** | No manifests, no entrypoints, empty workspace | Use the `AskQuestion` form below (no app variant) |
 
-**AskQuestion form — unclear workspace** (populate the candidate options dynamically with the paths you detected; always include the two fixed options at the end):
+A workspace with two or more candidate packages is **always Unclear** — never guess which one to integrate, even when one looks like the obvious frontend or backend choice. Pick the workspace classification before asking, not after.
+
+**AskQuestion form — unclear workspace** (populate the candidate options dynamically with the paths you detected; for a monorepo, list **one option per candidate package** with its workspace-relative path as the label; always include the two fixed options at the end):
 ```json
 {
   "questions": [
     {
       "id": "app_location",
-      "prompt": "I found some project files but I'm not confident I've identified the right app. Which one should I use?",
+      "prompt": "I found multiple candidate packages here. Which one do you want to wire up first?",
       "options": [
-        { "id": "candidate_1", "label": "<detected candidate path>" },
-        { "id": "demo", "label": "There is no app yet — scaffold a demo for me" },
+        { "id": "candidate_1", "label": "<detected candidate path, e.g. packages/api>" },
+        { "id": "candidate_2", "label": "<detected candidate path, e.g. packages/web>" },
+        { "id": "demo", "label": "None of these — scaffold a demo for me" },
         { "id": "other", "label": "It's somewhere else — I'll tell you where" }
       ]
     }
@@ -416,8 +419,8 @@ If they insist: respect it, note what was skipped, and state the dependency risk
 
 ## Edge Cases
 
-- **SDK already installed:** Skip Step 3. Verify the version and patterns, then move to Step 4.
-- **MCP already configured:** Skip MCP setup in Step 2. Call `get-project` to store keys, then continue.
+- **SDK already installed:** Skip Step 3 entirely. Before moving on, say so out loud in one user-facing line that names what you found and where (e.g. "I see `@launchdarkly/node-server-sdk` already in `package.json` and initialized in `src/launchdarkly.js` — skipping install."). Do not narrate "let's install the SDK," do not run install commands, do not re-explain what the SDK does. Verify the version is current and proceed directly to Step 4.
+- **MCP already configured:** Skip MCP setup in Step 2. Acknowledge it in one user-facing line ("MCP is already connected — using your existing configuration.") so the user knows why setup is being skipped. Call `get-project` to store keys, then continue.
 - **No supported agent detected:** Ask directly. Provide manual config instructions if needed.
 - **npx not available:** Provide manual skill installation (clone repo, copy skill directories).
 - **User only wants partial setup:** Respect the choice. State what's missing and what that limits.

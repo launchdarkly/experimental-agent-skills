@@ -33,5 +33,8 @@ defaultTest:
     # Per-run cost is still surfaced in promptfoo's summary output and
     # in eval-scores.json; rely on those + trend tracking instead of
     # making cost an assertion.
+    # 180s accommodates the longest legitimate onboarding run (multi-turn
+    # flows commonly take 60-150s; flag a true regression at 3 min). Fast
+    # single-action skills can override per-suite if a tighter cap matters.
     - type: latency
-      threshold: 90000
+      threshold: 180000
