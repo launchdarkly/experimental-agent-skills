@@ -1,0 +1,590 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Run with shared defaults:
+#   promptfoo eval -c ../shared/defaults.yaml -c onboarding/promptfooconfig.yaml
+#
+# The onboarding skill is the parent orchestrator: it runs a kickoff phase
+# (Steps 0-3 silently), hands off to nested skills (mcp-configure,
+# sdk-install, first-flag), and has multiple blocking decision points
+# (D5/D7/D8/D9). A full E2E run takes 50+ turns and requires user input
+# at decision points, so the suite scores **outcomes per scenario**:
+# pick a starting state, drop the agent in, and check whether the first
+# turn-or-two of behavior matches what the skill says should happen.
+#
+# Provider config notes:
+#   - allow_builtins: true       -> Read/Write/Bash/Edit/Grep/Glob exposed.
+#                                   The skill needs them for Step 0 (write
+#                                   onboarding log), Step 1 (read codebase),
+#                                   and Step 3 (npx skills add).
+#   - expose_mcp_tools: true     -> LD MCP mocks needed for Steps 4-6
+#                                   (list/get/create/update flags + envs).
+#   - expose_ask_question: true  -> harness-ux MCP server registers an
+#                                   `ask-question` tool so blocking
+#                                   decision points become first-class
+#                                   trajectory entries instead of
+#                                   best-effort response-text regex.
+#
+# See ../shared/assertions.js for the FIRST/LAST trajectory convention.
+description: "End-to-end evaluation of the onboarding orchestrator skill"
+
+prompts:
+  - file://../../skills/onboarding/SKILL.md
+
+providers:
+  - id: file://../providers/claude-skill-agent-sdk.js
+    label: claude-skill-agent-sdk
+    config:
+      skill_slug: onboarding
+      allow_builtins: true
+      expose_mcp_tools: true
+      expose_ask_question: true
+
+tests:
+  # ------------------------------------------------------------------
+  # Test 1: Happy-path kickoff. Clean Node.js Express repo, generic
+  # "onboard me" request. The agent should produce a friendly roadmap
+  # in its FIRST user-facing message, not ask premature account/key
+  # questions, and not leak internal decision-point IDs or skill file
+  # paths into chat.
+  #
+  # All Test-1 text assertions check `first_assistant_text` (the
+  # agent's opening reply) rather than `response` (the final summary
+  # at end-of-flow). The skill explicitly says the kickoff happens
+  # in the first assistant turn; a wrap-up at turn 30 doesn't tell
+  # us whether the user actually got an orientation up front.
+  # ------------------------------------------------------------------
+  - description: "Kickoff: opening reply is a friendly roadmap, no premature credential questions, no leaked internal labels"
+    vars:
+      user_request: >
+        Onboard me to LaunchDarkly. The project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json includes "express": "^4.18.0" and a small set of
+        utility deps. There is no existing LaunchDarkly integration --
+        no @launchdarkly/* in dependencies, no LDClient.init calls
+        anywhere, no LAUNCHDARKLY_ONBOARDING.md or LAUNCHDARKLY.md.
+        The repo uses standard `npm` as its package manager.
+      max_turns: 30
+    assert:
+      - type: javascript
+        value: |
+          const text = (output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No first_assistant_text captured' };
+          const beats = {
+            explore: /\b(explor|inspect|scan|check the (project|repo|codebase)|look at|understand)\b/.test(text),
+            mcp: /\bmcp\b|\b(set up|configure|install).*(tool|server)\b/.test(text),
+            sdk: /\bsdk\b|\b(install|wire|integrat|add).*(launchdarkly|ld\b)/.test(text),
+            flag: /\b(feature flag|first flag|create.*(flag|boolean)|boolean flag)\b/.test(text),
+          };
+          const hits = Object.entries(beats).filter(([_, v]) => v).map(([k]) => k);
+          const score = hits.length / 4;
+          const pass = score >= 0.75;
+          return { pass, score, reason: 'arc beats in first reply (' + hits.length + '/4): ' + hits.join(', ') };
+        metric: roadmap_framing
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No first_assistant_text captured' };
+          const banned = [
+            /do you (already )?have (a )?launchdarkly account/,
+            /already.*(an? )?launchdarkly account/,
+            /sign(ing)? up.*(before|first)/,
+            /create.*(an? )?(launchdarkly )?account.*(first|before)/,
+          ];
+          const hit = banned.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No upfront account question in opening reply' : 'Asked about account upfront: matched ' + hit };
+        metric: no_premature_account_question
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No first_assistant_text captured' };
+          const banned = [
+            /(give|share|paste|provide|enter|send) (me )?(your |the )?(sdk key|client[- ]side id|mobile key|api token|api key|access token)/,
+            /what (is|'s) your (sdk key|client[- ]side id|mobile key|api token|access token)/,
+            /need your (sdk key|client[- ]side id|mobile key|api token|access token)/,
+          ];
+          const hit = banned.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No upfront key/token request in opening reply' : 'Requested credential upfront: matched ' + hit };
+        metric: no_premature_key_question
+        weight: 3
+
+      - type: javascript
+        value: |
+          // Apply this check across BOTH the kickoff turn and the final
+          // wrap-up: internal labels should never appear anywhere in chat.
+          const samples = [output.first_assistant_text || '', output.response || ''];
+          const checks = [
+            { name: 'D-IDs', re: /\bD\d+(?:-[A-Z]+)?\b/, useRaw: true },
+            { name: 'BLOCKING', re: /\bBLOCKING\b/, useRaw: false },
+            { name: 'STOP. Do not continue', re: /STOP\.\s*Do not continue/i, useRaw: false },
+            { name: 'call your structured question tool', re: /call your structured question tool/i, useRaw: false },
+            { name: 'skill file path', re: /[a-z][a-z0-9-]*\/SKILL\.md/, useRaw: true },
+            { name: 'Step N -- label', re: /Step \d+\s*--\s*[a-z]+/i, useRaw: true },
+          ];
+          const hits = [];
+          for (const c of checks) {
+            for (const raw of samples) {
+              const target = c.useRaw ? raw : raw.toLowerCase();
+              const m = target.match(c.re);
+              if (m) { hits.push(c.name + (m[0] ? '=' + m[0] : '')); break; }
+            }
+          }
+          const pass = hits.length === 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No internal labels leaked' : 'Leaked: ' + hits.join(', ') };
+        metric: no_internal_labels
+        weight: 2
+
+      - type: javascript
+        value: |
+          const text = output.first_assistant_text || '';
+          const hasCommand = /```(bash|sh|shell|zsh)\b/i.test(text)
+            || /\b(npm|pnpm|yarn|npx)\s+(install|i|add|skills)\b/i.test(text);
+          if (!hasCommand) {
+            return { pass: true, score: 1, reason: 'No commands shown in opening reply -- where-to-run check is moot' };
+          }
+          const lower = text.toLowerCase();
+          const locations = [
+            /\bintegrated terminal\b/,
+            /\bin (your|a)? ?terminal\b/,
+            /\bproject root\b/,
+            /\brepo root\b/,
+            /\bin the .* (folder|directory|package)\b/,
+            /\bcd .*\b.*\bthen\b/,
+            /\bfrom the .* (folder|directory|package|root)\b/,
+          ];
+          const matched = locations.some((re) => re.test(lower));
+          return { pass: matched, score: matched ? 1 : 0, reason: matched ? 'Command + location language present' : 'Showed a command but no where-to-run location' };
+        metric: mentions_where_to_run
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          You are evaluating ONLY the agent's FIRST user-facing reply, which is
+          available in the structured output as `first_assistant_text`. Ignore
+          `response` (that is the final wrap-up after the whole onboarding ran;
+          we are scoring the kickoff message specifically).
+
+          The user said "Onboard me to LaunchDarkly" with a clean Node.js
+          Express repo and no existing LaunchDarkly integration. The onboarding
+          SKILL.md requires the agent's opening reply to (a) be a friendly
+          conversational roadmap covering the arc explore -> set up tooling
+          (MCP) -> install SDK -> create first flag, (b) defer credential
+          questions per Prerequisites (no upfront "do you have an account?"
+          or "give me your SDK key"), (c) not leak internal labels (D1/D5/
+          Step 5 -- detect/skill file paths like sdk-install/SKILL.md), and
+          (d) sound like a knowledgeable colleague rather than a workflow
+          engine.
+
+          Evaluate `first_assistant_text` only:
+          1. Did it open with a friendly summary covering the arc (explore /
+             tooling / SDK / flag) without numbered "Step N" labels?
+          2. Did it avoid asking about LaunchDarkly account status upfront?
+          3. Did it avoid asking for SDK keys / tokens / client-side IDs upfront?
+          4. Did it sound conversational (first-person, "I'll", "we'll") rather
+             than copy-pasting workflow instructions?
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+          If `first_assistant_text` is empty, score 0 (the agent never spoke
+          to the user before being cut off).
+        metric: kickoff_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 2: Monorepo D5 ambiguity. The agent must call the
+  # ask-question tool listing the candidate packages instead of
+  # silently picking one or starting at the root.
+  # ------------------------------------------------------------------
+  - description: "Monorepo D5: stops to ask which package to integrate, does not silently pick one"
+    vars:
+      user_request: >
+        Add LaunchDarkly to this monorepo. The project key is "platform".
+      codebase_context: >
+        pnpm workspace at the repo root. The root package.json contains
+        "workspaces": ["packages/*"]. Three packages:
+          - packages/api: Node.js Express HTTP service (server-side).
+          - packages/web: Next.js React frontend (browser + server).
+          - packages/shared: utility library, not directly runnable.
+        No existing LaunchDarkly integration in any package. No
+        LAUNCHDARKLY_ONBOARDING.md present.
+      max_turns: 15
+    assert:
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const pass = tools.includes('ask-question');
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'ask-question called' : 'Tools called: ' + (tools.length ? tools.join(' -> ') : '(none)') };
+        metric: calls_ask_question
+        weight: 3
+
+      - type: javascript
+        value: |
+          const call = (output.trajectory || []).find((t) => t.tool === 'ask-question');
+          if (!call) return { pass: false, score: 0, reason: 'No ask-question call to inspect' };
+          const opts = call.arguments && Array.isArray(call.arguments.options) ? call.arguments.options : [];
+          const labels = opts.map((o) => String((o && o.label) || (o && o.id) || '').toLowerCase()).join(' | ');
+          const ids = opts.map((o) => String((o && o.id) || '').toLowerCase()).join(' | ');
+          const haystack = labels + ' | ' + ids;
+          const pkgHits = ['api', 'web', 'shared'].filter((p) => new RegExp('\\b' + p + '\\b').test(haystack));
+          const score = Math.min(1, pkgHits.length / 2);
+          const pass = pkgHits.length >= 2;
+          return { pass, score, reason: 'package mentions in options: ' + (pkgHits.join(', ') || 'none') + ' (labels: ' + labels + ')' };
+        metric: ask_question_offers_packages
+        weight: 2
+
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const writeTools = [
+            'create-feature-flag', 'update-feature-flag',
+            'create-flag', 'toggle-flag', 'update-flag-settings',
+            'setup-ai-config', 'create-ai-config',
+            'create-ai-config-variation', 'update-ai-config',
+            'update-ai-config-variation', 'clone-ai-config-variation',
+            'delete-ai-config', 'delete-ai-config-variation', 'create-ai-tool',
+          ];
+          const violations = writeTools.filter((t) => tools.includes(t));
+          const pass = violations.length === 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No mutation tools called' : 'Called write tools before/around D5: ' + violations.join(', ') };
+        metric: no_write_tools
+        weight: 3
+
+      - type: llm-rubric
+        value: |
+          The user dropped LaunchDarkly into a pnpm monorepo with three packages
+          (packages/api, packages/web, packages/shared). Per the SKILL.md
+          Edge Cases table, "Monorepo" and "Multiple languages in repo" are
+          BLOCKING D5 cases: the agent must call its question tool with the
+          candidate packages and stop, not guess.
+
+          Evaluate:
+          1. Did the agent recognize this is a monorepo and not silently
+             pick one package?
+          2. Did it ask exactly one question naming the candidate packages
+             (api / web / shared) as options?
+          3. Did it phrase the question conversationally rather than copy-
+             pasting "D5 -- BLOCKING" or skill-file references into chat?
+          4. Did it avoid starting any LaunchDarkly setup work (MCP config,
+             SDK install, flag creation) before getting an answer?
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+        metric: decision_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 3: SDK already installed and initialized. Per the Edge Cases
+  # table, the agent should skip Step 5 entirely and go to Step 6
+  # (first flag) without re-running install commands.
+  # ------------------------------------------------------------------
+  - description: "Skips Step 5 when SDK is already installed and initialized, hands off to first flag"
+    vars:
+      user_request: >
+        Set up LaunchDarkly in this project. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server. package.json declares
+        "@launchdarkly/node-server-sdk": "^9.0.0" alongside "express".
+        The file src/launchdarkly.js exports a fully-initialized client:
+
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          await ldClient.waitForInitialization();
+          module.exports = ldClient;
+
+        The client is imported and used in src/server.js. There is no
+        LAUNCHDARKLY_ONBOARDING.md and no existing flag yet. MCP is
+        already configured. The launchdarkly-flag-create skill is NOT
+        installed in this session.
+      max_turns: 25
+    assert:
+      - type: javascript
+        value: |
+          const text = output.response || '';
+          const installPatterns = [
+            /npm\s+(install|i)\b[^\n]*@launchdarkly/i,
+            /yarn\s+add\b[^\n]*@launchdarkly/i,
+            /pnpm\s+(add|install)\b[^\n]*@launchdarkly/i,
+          ];
+          const hit = installPatterns.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No SDK install command shown' : 'Suggested re-installing SDK: ' + (text.match(hit) || []).join(' ') };
+        metric: skips_install
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.response || '').toLowerCase();
+          const tools = output.tools_called || [];
+          const flagSignals = [
+            /\b(first|initial|starter) (feature )?flag\b/,
+            /\bcreate (a |your )?(boolean |first |feature )?flag\b/,
+            /\bset up.*flag\b/,
+            /\bproof[- ]of[- ]life\b/,
+          ];
+          const mentionsFlag = flagSignals.some((re) => re.test(text));
+          const calledCreate = tools.includes('create-feature-flag');
+          const pass = mentionsFlag || calledCreate;
+          const score = (mentionsFlag ? 0.5 : 0) + (calledCreate ? 0.5 : 0);
+          return { pass, score: Math.max(score, pass ? 0.5 : 0), reason: 'mentionsFlag=' + mentionsFlag + ' calledCreate=' + calledCreate };
+        metric: proceeds_to_first_flag
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.response || '').toLowerCase();
+          const reExploreLines = [
+            /let'?s start by exploring/,
+            /first(,|.| i'?ll| let me) (i'?ll )?(explore|check|look at|inspect) (the|your) (project|repo|codebase)/,
+            /i'?ll (start|begin) by (exploring|checking|looking at|inspecting) (the|your) (project|repo|codebase)/,
+            /(installing|let me install) the companion (skills|flag skills)/,
+          ];
+          const hit = reExploreLines.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No redundant re-exploration narrative' : 'Re-narrated kickoff: matched ' + hit };
+        metric: no_redundant_explore
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          The codebase already has @launchdarkly/node-server-sdk installed and
+          fully initialized (LaunchDarkly.init + waitForInitialization is in
+          src/launchdarkly.js). Per the SKILL.md Edge Cases table, the agent
+          should skip Step 5 entirely and proceed to Step 6 (first flag).
+
+          Evaluate:
+          1. Did the agent recognize the SDK is already installed and
+             initialized (mention the existing setup, file, or version)?
+          2. Did it skip giving install instructions for any
+             @launchdarkly/* package?
+          3. Did it move on to the first-flag step (either by creating a
+             flag via MCP, suggesting a flag name, or describing the
+             create -> verify off -> toggle on -> verify on flow)?
+
+          Score 1.0 if all three are met. Deduct 0.33 per missed criterion.
+        metric: skip_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 4: Resume scenario. An onboarding log already exists with
+  # Steps 0-4 done and "Next step: Step 5". Per the SKILL.md Resuming
+  # rules, the agent should read the log, refresh the task list, and
+  # continue from the recorded next step instead of restarting.
+  # ------------------------------------------------------------------
+  - description: "Resume from existing log: continues from recorded next step (Step 5), does not restart kickoff"
+    vars:
+      user_request: >
+        Continue setting up LaunchDarkly in this project.
+      codebase_context: >
+        Single-package Node.js Express server at the repo root with
+        package.json including "express". No LaunchDarkly SDK in
+        dependencies yet.
+
+        An existing LAUNCHDARKLY_ONBOARDING.md is at the repo root with
+        these contents (verbatim):
+
+        # LaunchDarkly Onboarding Log
+
+        ## Checklist
+        - [x] Step 0: Onboarding log
+        - [x] Step 1: Explore project (Node.js Express, package.json found)
+        - [x] Step 2: Detect agent (cursor)
+        - [x] Step 3: Install companion skills (launchdarkly-flag-create,
+              launchdarkly-flag-discovery, launchdarkly-flag-targeting,
+              launchdarkly-flag-cleanup -- all installed)
+        - [x] Step 4: Configure MCP (hosted MCP configured, project key
+              "web-app" confirmed)
+        - [ ] Step 5: Install and Initialize the SDK (not started)
+        - [ ] Step 6: Create your first feature flag
+
+        ## Context
+        - agent: cursor
+        - language: Node.js / Express
+        - project key: web-app
+        - environment: production
+
+        ## Next step
+        Step 5: Install and Initialize the SDK
+      max_turns: 18
+    assert:
+      - type: javascript
+        value: |
+          // Acknowledgement should appear in the opening reply when the
+          // agent recognises a log; if `first_assistant_text` is empty
+          // (rare) fall back to the final response.
+          const text = (output.first_assistant_text || output.response || '').toLowerCase();
+          const signals = [
+            /\bresum(e|ing)\b/,
+            /\bpick(ing)? (this|things|onboarding)? ?up\b/,
+            /\bpick(ing)? up where (we|you) left off\b/,
+            /\bcontinu(e|ing) (from|with|the)\b/,
+            /\bwhere (we|you) left off\b/,
+            /\bback to (it|onboarding)\b/,
+          ];
+          const matched = signals.filter((re) => re.test(text));
+          const pass = matched.length > 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Resume language present (' + matched.length + ' matches)' : 'No resume acknowledgement found in opening reply' };
+        metric: resume_acknowledged
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.first_assistant_text || output.response || '').toLowerCase();
+          const restartSignals = [
+            /let'?s start by exploring/,
+            /first,? i'?ll (explore|check|look at|inspect|scan) (the|your) (project|repo|codebase)/,
+            /i'?ll (start|begin) by (exploring|checking|looking at|inspecting|scanning)/,
+            /running `?npx skills add/,
+            /(installing|let me install) the companion (skills|flag skills)/,
+            /first,? (let me )?detect (the|your) (agent|coding agent)/,
+          ];
+          const hit = restartSignals.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No re-narration of completed setup in opening reply' : 'Re-narrated completed setup: matched ' + hit };
+        metric: does_not_redo_setup
+        weight: 3
+
+      - type: javascript
+        value: |
+          // The "next step" framing can land in either the opening reply
+          // (acknowledgement) or the final summary (after doing the work).
+          const text = ((output.first_assistant_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const sdkSignals = [
+            /\bstep ?5\b/,
+            /\binstall.*sdk\b/,
+            /\binstall.*@launchdarkly/,
+            /\bwire (up|in) the sdk\b/,
+            /\binitiali[sz]e the sdk\b/,
+            /\bsdk install\b/,
+          ];
+          const matched = sdkSignals.filter((re) => re.test(text));
+          const pass = matched.length > 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Targets SDK install / Step 5 (' + matched.length + ' signals)' : 'Did not mention the recorded next step (Step 5 / SDK install) in either reply' };
+        metric: targets_recorded_next_step
+        weight: 2
+
+      - type: llm-rubric
+        value: |
+          An onboarding log already exists at LAUNCHDARKLY_ONBOARDING.md with
+          Steps 0-4 marked done and the recorded Next step is "Step 5: Install
+          and Initialize the SDK". Per the SKILL.md Resuming rules, the agent
+          should: read the log first, refresh the task list to match it, and
+          continue from the recorded next step rather than restarting kickoff.
+
+          The structured output has two text fields: `first_assistant_text`
+          (the opening reply, where the agent should acknowledge the existing
+          log) and `response` (the final wrap-up). Use `first_assistant_text`
+          for criterion 1 and 3, and either field for criterion 2.
+
+          Evaluate:
+          1. Did the opening reply acknowledge the existing log / that work
+             was already done (without re-narrating Steps 0-3)?
+          2. Did the agent correctly identify Step 5 (SDK install) as the
+             next step (in either field)?
+          3. Did the opening reply avoid running or recommending the kickoff
+             actions again (no fresh project exploration narrative, no
+             re-installing the companion flag-management skills, no
+             re-prompting for MCP)?
+
+          Score 1.0 if all three are met. Deduct 0.33 per missed criterion.
+        metric: resume_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 5: First-flag handoff (Steps 0-5 done, agent reaches Step 6).
+  # The agent should create a boolean flag, then toggle it on/off via
+  # MCP to demonstrate end-to-end. No targeting rules in this step.
+  # ------------------------------------------------------------------
+  - description: "First flag: creates a kebab-case boolean flag and verifies via toggle, no premature targeting"
+    vars:
+      user_request: >
+        Create my first feature flag in LaunchDarkly. The SDK is already
+        wired up. Project key is "web-app".
+      codebase_context: >
+        All onboarding Steps 0-5 are complete. SDK installed at
+        @launchdarkly/node-server-sdk@^9.0.0 and initialized in
+        src/launchdarkly.js using process.env.LAUNCHDARKLY_SDK_KEY.
+        MCP is configured (hosted, OAuth, project "web-app" confirmed).
+        The launchdarkly-flag-create skill is NOT installed in this
+        session -- flag work goes through MCP. There are no flags in
+        the project yet.
+
+        For demo purposes, we want a boolean flag wrapping a small
+        feature in src/server.js. Suggested key direction: something
+        like `show-greeting` or similar -- you choose a sensible name.
+      max_turns: 20
+    assert:
+      - type: javascript
+        value: |
+          // Accept either canonical (create-feature-flag) or alias
+          // (create-flag) name: both are exposed in tools/definitions.json
+          // and the skill treats them interchangeably for outcome.
+          const tools = output.tools_called || [];
+          const created = tools.includes('create-feature-flag') || tools.includes('create-flag');
+          return { pass: created, score: created ? 1 : 0, reason: created ? 'A flag-creation tool was called' : 'No flag creation in: ' + (tools.length ? tools.join(' -> ') : '(none)') };
+        metric: calls_create_feature_flag
+        weight: 3
+
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const call = traj.find((t) => t.tool === 'create-feature-flag') || traj.find((t) => t.tool === 'create-flag');
+          if (!call) return { pass: false, score: 0, reason: 'No create-feature-flag/create-flag call to inspect' };
+          const key = (call.arguments && call.arguments.key) || '';
+          const kebab = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(key);
+          return { pass: kebab, score: kebab ? 1 : 0, reason: 'flag key=' + (key || '(missing)') + ' kebab=' + kebab + ' (via ' + call.tool + ')' };
+        metric: flag_key_kebab_case
+        weight: 2
+
+      - type: javascript
+        value: |
+          // FIRST occurrence of any creation tool, LAST occurrence of any
+          // toggle tool: the toggle must come after the create.
+          const tools = output.tools_called || [];
+          const createIdx = Math.min(
+            ...['create-feature-flag', 'create-flag']
+              .map((n) => { const i = tools.indexOf(n); return i < 0 ? Infinity : i; })
+          );
+          const toggleIdx = Math.max(
+            ...['update-feature-flag', 'toggle-flag']
+              .map((n) => tools.lastIndexOf(n))
+          );
+          const pass = Number.isFinite(createIdx) && toggleIdx > createIdx;
+          return { pass, score: pass ? 1 : 0, reason: 'createIdx=' + (Number.isFinite(createIdx) ? createIdx : 'none') + ' toggleIdx=' + (toggleIdx >= 0 ? toggleIdx : 'none') };
+        metric: calls_toggle_to_verify
+        weight: 2
+
+      - type: javascript
+        value: |
+          const updates = (output.trajectory || []).filter((t) => t.tool === 'update-feature-flag' || t.tool === 'update-flag-settings');
+          const complex = updates.find((u) => Array.isArray(u.arguments && u.arguments.instructions) && u.arguments.instructions.length > 0);
+          const pass = !complex;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No targeting/rule instructions on flag updates' : 'Sent semantic-patch instructions on first-flag toggle: ' + JSON.stringify(complex.arguments.instructions).slice(0, 100) };
+        metric: no_premature_targeting
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          This is Step 6 (first flag) in the onboarding flow. Per
+          first-flag/SKILL.md the agent should: (1) create a boolean flag
+          (default off, kebab-case key), (2) wire flag evaluation in code so
+          the user can see the value change, (3) verify the OFF state, then
+          toggle ON, then verify ON. Targeting rules are NOT part of this
+          step -- this is just a proof-of-life demo.
+
+          Evaluate:
+          1. Did the agent create a boolean feature flag with a sensible
+             kebab-case key (e.g. `show-greeting`, `enable-banner`)?
+          2. Did it plan or execute the off -> on verification cycle
+             (toggling via update-feature-flag and showing or describing
+             how the user can observe the change)?
+          3. Did it avoid adding targeting rules or rollouts in this step?
+          4. Did it avoid hardcoding SDK keys directly into code (env vars
+             only)?
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+        metric: first_flag_quality
+        weight: 2
