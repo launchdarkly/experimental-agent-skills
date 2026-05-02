@@ -96,7 +96,7 @@ promptfoo eval -c shared/defaults.yaml -c <skill>/promptfooconfig.yaml
 promptfoo's `combineConfigs` deep-merges `defaultTest.options`, concatenates `defaultTest.assert`, and dedupes providers, so the suite config only declares what's specific to it (description, prompts, provider config, tests, suite-specific assertions). The shared defaults supply:
 
 - `defaultTest.options.provider: "{{env.RUBRIC_MODEL}}"` - rubric grader (cheap model).
-- `defaultTest.options.transform: file://./transform.js` - parses the agent's JSON output once. Every javascript assertion downstream receives `output` as an object with `{ response, trajectory, tools_called, turn_count }` instead of a string. **Do not call `JSON.parse(output)` inside assertions.**
+- `defaultTest.options.transform: file://./transform.js` - parses the agent's JSON output once. Every javascript assertion downstream receives `output` as an object with `{ response, first_assistant_text, kickoff_text, assistant_turns, trajectory, tools_called, turn_count, terminated }` instead of a string. **Do not call `JSON.parse(output)` inside assertions.**
 - `defaultTest.assert: [output_valid, cost, latency]` - cheap regression detection. `output_valid` is weight 0 so it does not affect the score, just surfaces transform failures clearly.
 
 ### Model strategy
@@ -130,14 +130,23 @@ Rationale: agents commonly call `get-foo` once before mutating and once after to
    ```json
    {
      "response": "The agent's final text...",
+     "first_assistant_text": "The agent's first non-empty text turn...",
+     "kickoff_text": "All assistant prose up to and including the first user-observable tool call...",
+     "assistant_turns": [
+       { "turn": 1, "text": "I'll help you with X..." },
+       { "turn": 2, "text": "Progress recap: ..." }
+     ],
      "trajectory": [
        { "tool": "list-ai-configs", "arguments": {...}, "turn": 1 },
        { "tool": "create-ai-config", "arguments": {...}, "turn": 2 }
      ],
      "tools_called": ["list-ai-configs", "create-ai-config"],
-     "turn_count": 3
+     "turn_count": 3,
+     "terminated": null
    }
    ```
+
+   Use `assistant_turns` when grading mid-run narration (progress recaps, per-stage "what just happened / what's next" beats). `kickoff_text` and `response` alone can't see intermediate turns because the provider only tracks the first and last text turns otherwise.
 5. `shared/transform.js` parses that into an object before assertions see it. Suite assertions read fields directly: `output.tools_called`, `output.trajectory`, etc.
 
 ## Aggregated quality artifact (`eval-scores.json`)

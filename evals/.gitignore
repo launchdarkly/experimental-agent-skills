@@ -15,3 +15,5 @@ results*.html
 # regenerated on each provider construction, never committed.
 .tmp-skill-fixtures/
 .tmp-isolated-home/
+onboarding-single-run.log
+.DS_Store

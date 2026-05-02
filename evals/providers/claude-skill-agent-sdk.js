@@ -13,8 +13,9 @@
  *    the same path users hit when they install the skill.
  *  - Tool calls go through SDK MCP plumbing into our in-process mock
  *    server, so the trajectory output is `{ response, first_assistant_text,
- *    kickoff_text, trajectory, tools_called, turn_count, terminated }` and
- *    every existing assertion keeps working without modification.
+ *    kickoff_text, assistant_turns, trajectory, tools_called, turn_count,
+ *    terminated }` and every existing assertion keeps working without
+ *    modification.
  *  - `response` is the final result text (or, on soft termination such as
  *    max_turns, the latest assistant text). `first_assistant_text` is the
  *    first non-empty text the agent emitted - useful for assertions on
@@ -30,8 +31,12 @@
  *    welcome/payoff/roadmap text, so sealing on them would drop exactly
  *    the prose the kickoff assertions need. Real action tools (Bash,
  *    Read, Glob, Edit, MCP calls, ask-question, etc.) still seal as
- *    expected. `terminated` is null on success, otherwise the SDK
- *    subtype (e.g. "max_turns").
+ *    expected. `assistant_turns` is an array of `{ turn, text }` entries
+ *    for every non-empty assistant text block across the whole run - use
+ *    it when you need to grade mid-run narration (progress recaps,
+ *    per-stage "what just happened / what's next" beats) that
+ *    `kickoff_text` and `response` can't see on their own. `terminated`
+ *    is null on success, otherwise the SDK subtype (e.g. "max_turns").
  *
  * Skill scoping:
  *  - Each provider instance gets its own isolated cwd
@@ -526,6 +531,14 @@ class ClaudeSkillAgentSdk {
     let finalText = "";
     let firstAssistantText = "";
     let lastAssistantText = "";
+    // assistantTurns captures every non-empty assistant text block across
+    // the whole run as `{ turn, text }` entries in order. Grades for
+    // mid-run narration (progress recaps, per-stage "what just happened /
+    // what's next" beats) read this; `kickoff_text` and `response` alone
+    // cannot see turns 3..N-1 because `lastAssistantText` is overwritten
+    // every turn. Existing assertions still work unchanged - they read
+    // specific fields by name.
+    const assistantTurns = [];
     // kickoffText accumulates every assistant text block from the start of
     // the run up to AND including the first turn that contains a tool_use
     // block. The motivation: skills that have a deliberate orientation
@@ -604,6 +617,7 @@ class ClaudeSkillAgentSdk {
           if (text) {
             if (!firstAssistantText) firstAssistantText = text;
             lastAssistantText = text;
+            assistantTurns.push({ turn: currentTurn, text });
             if (!kickoffSealed) {
               kickoffText += (kickoffText ? "\n\n" : "") + text;
             }
@@ -688,6 +702,7 @@ class ClaudeSkillAgentSdk {
         response: finalText || "(no final response captured)",
         first_assistant_text: firstAssistantText,
         kickoff_text: kickoffText,
+        assistant_turns: assistantTurns,
         trajectory,
         tools_called: trajectory.map((t) => t.tool),
         turn_count: turnCount,

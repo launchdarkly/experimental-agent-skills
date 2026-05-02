@@ -466,6 +466,63 @@ tests:
         metric: skip_quality
         weight: 2
 
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: SDK is already installed and initialized, MCP is
+          already configured. Per the SKILL.md "Experience Detection"
+          section, that combination means the agent should use FAST MODE:
+            - Skip the roadmap table at kickoff.
+            - Drop pre-narration ("here's what I'm about to do") for each
+              stage -- just do it.
+            - State what was done in one line after completing each action.
+            - Jump directly to the first incomplete step (Step 4 / Ship).
+          Both modes still require the mandatory progress recap block
+          (titled "Progress" with lines prefixed by `✓` for completed
+          stages and `→` for the current stage) on every substantive reply.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the kickoff told the user, in one or two
+              sentences, what was already in place and what the agent was
+              about to do next (e.g. "SDK is installed, MCP is connected.
+              Creating your first flag now."). The four-row roadmap table
+              is NOT required in fast mode, but the user should still know
+              where they are headed.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include short "what I just did" lines after each meaningful
+              action, and a progress recap block (✓ and → markers) on
+              substantive replies. No silent execution.
+
+          (3) Value framing — somewhere in the run (typically the final
+              reply) the agent names what the user is actually getting
+              from this — a live feature flag, flip-a-switch change
+              without a redeploy — not a generic "done" or
+              "setup complete".
+
+          (4) Completion signal — the final reply unambiguously signals
+              the user has arrived (e.g. "Your first flag is live and
+              ready to use." or an equivalent factual statement per the
+              skill's Voice & Tone rules). If the run was soft-terminated
+              before reaching this point, the last assistant turn should
+              still state the current status as a fact, not trail off
+              mid-action.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
   # ------------------------------------------------------------------
   # Test 4: Resume after restart. Per the SKILL.md "Resume After
   # Restart" section, when the user says "continue onboarding" the
@@ -625,6 +682,61 @@ tests:
         metric: resume_quality
         weight: 2
 
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: the user said "Continue onboarding" after a
+          restart. MCP is configured, SDK is installed and initialized,
+          no flags exist yet. Per the SKILL.md "Resume After Restart"
+          section, the agent must re-survey silently (probe MCP, scan
+          deps, check for flag evaluations), acknowledge the resume state
+          in ONE sentence, render a progress recap showing everything
+          already complete, and continue without preamble. This
+          effectively mandates fast-mode narrative rules (no roadmap
+          table, no re-narrating finished stages) plus an explicit
+          acknowledgement line that the work so far is recognized.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the first reply acknowledges the resume
+              state in a single sentence and states the next action
+              (landing on Step 4 / Ship). No roadmap table, no
+              "I'll start by exploring", no re-asking account_status.
+              Equivalent of "You're connected and the SDK is installed.
+              Creating your first flag now." counts.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include a progress recap block (✓ and → markers) on
+              substantive replies, showing what was confirmed during the
+              re-survey (MCP connected, SDK installed) and what is
+              happening now. Each meaningful action is followed by a
+              terse "what I just did" line.
+
+          (3) Value framing — somewhere in the run the agent names the
+              actual payoff the user gets — a live feature flag, a visible
+              change without a redeploy — not generic "setup complete" or
+              "onboarding finished" language.
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival ("Your first flag is live and ready to use." or an
+              equivalent fact statement). If the run was soft-terminated
+              before reaching Step 4 completion, the last turn should
+              still state the current status as a fact.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
   # ------------------------------------------------------------------
   # Test 5: First-flag handoff (Step 4 / Ship). Onboarding is complete
   # through Step 3 -- SDK installed, MCP configured, no flags yet. The
@@ -771,3 +883,232 @@ tests:
           Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
         metric: first_flag_quality
         weight: 2
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: SDK is already installed and initialized, MCP is
+          already configured, and the user explicitly asked the agent to
+          create their first feature flag. Per the SKILL.md "Experience
+          Detection" section, this combination puts the agent in FAST
+          MODE. Per Step 4 ("Ship") the agent should proceed without
+          asking if the user is ready, create the flag, add a visible
+          flag-gated element, confirm the OFF state via a structured
+          question, toggle ON, and close with the literal line "Your
+          first flag is live and ready to use." followed by next-move
+          suggestions.
+
+          Fast mode rules:
+            - Skip the roadmap table.
+            - Drop pre-narration ("here's what I'm about to do") for
+              each stage -- just do it.
+            - State what was done in one line after each action.
+            - Both modes still require the mandatory progress recap
+              block (titled "Progress", with `✓` completed lines and a
+              `→` current line) on every substantive reply.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the first turn or two tells the user, in
+              one sentence, what is about to happen (creating a first
+              flag, wiring it to a visible element, verifying OFF, then
+              toggling ON). No roadmap table, no "I'll start by
+              exploring". The user knows where they are headed without
+              ceremony.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include short "what I just did" lines after meaningful
+              actions (flag created, element added, dev server running,
+              OFF confirmed, flag toggled) and a progress recap block
+              (✓ and → markers) on substantive replies. No silent
+              execution between tool calls.
+
+          (3) Value framing — the final reply names the actual payoff —
+              a live feature flag the user can flip from LaunchDarkly and
+              watch change in their app without a redeploy — not a
+              generic "done" or "setup complete".
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival. Strongest signal: the literal skill line
+              "Your first flag is live and ready to use." A close
+              paraphrase ("Your feature flag is live" / "flag is ready
+              to use") also satisfies. Generic "all done" / "complete"
+              without naming the flag does NOT. Next-move suggestions
+              (discovery, targeting, cleanup) are a bonus but not
+              required.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 6: Narrative quality, end-to-end, full mode. Clean Node.js
+  # Express repo with no LaunchDarkly presence and no MCP configured --
+  # experience detection lands on FULL MODE per the skill. The agent
+  # should flow through all four decision points (account_status,
+  # mcp_decision, sdk_install_mode, off_state_confirmed) and arrive at
+  # Step 4's completion line. `mock_ask_question_answers` pins each
+  # answer so the arc advances instead of stalling.
+  #
+  # The codebase_context names a concrete entrypoint (src/server.js
+  # with a /hello endpoint) so the agent wires the flag into the
+  # existing app rather than scaffolding a new demo. Scaffolding
+  # triggers `npm start` on the generated project, which hangs the
+  # harness -- Bash calls block until the spawned process exits, and
+  # a real dev server never does. Matches Test 5's strategy.
+  #
+  # The test isolates narrative quality as its own signal: regressions
+  # show up here as a single red test instead of being diluted across
+  # the weighted scores of Tests 3/4/5.
+  # ------------------------------------------------------------------
+  - description: "Narrative quality: full-mode arc narrates plan upfront, states progress along the way, names value at completion, and signals done"
+    vars:
+      user_request: >
+        Onboard me to LaunchDarkly. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0" and a "start" script
+        that runs `node src/server.js`. The entrypoint src/server.js
+        defines an Express app with a `/hello` endpoint that returns
+        "Hello, world!" No @launchdarkly/* in dependencies, no
+        LDClient.init calls, no existing flags. MCP is not configured
+        yet. The repo uses npm. For Step 4, add the flag-gated element
+        to the existing `/hello` endpoint in src/server.js -- do not
+        scaffold a new demo app.
+      max_turns: 22
+      # Each sub-array is the `selected` IDs returned for the nth
+      # ask-question call. Ordered to match the skill's decision points:
+      #   1. account_status (Kickoff)       -> "yes"
+      #   2. mcp_decision (Step 2)          -> "yes"
+      #   3. sdk_install_mode (Step 3)      -> "auto"
+      #   4. off_state_confirmed (Step 4)   -> "confirmed"
+      mock_ask_question_answers:
+        - ["yes"]
+        - ["yes"]
+        - ["auto"]
+        - ["confirmed"]
+    assert:
+      - type: javascript
+        value: |
+          // Mechanical floor against "agent forgot the progress recap
+          // block". The skill mandates a titled "Progress" block with
+          // ✓ (completed) and → (current) markers on every substantive
+          // reply. We count turns in `assistant_turns` that contain BOTH
+          // markers and pass at 3+. Lower than that means either the
+          // agent skipped most recaps or the run terminated early.
+          const turns = output.assistant_turns || [];
+          if (turns.length === 0) return { pass: false, score: 0, reason: 'No assistant_turns captured' };
+          const withRecap = turns.filter((t) => {
+            const text = String((t && t.text) || '');
+            return text.includes('✓') && text.includes('→');
+          });
+          const pass = withRecap.length >= 3;
+          const score = Math.min(1, withRecap.length / 3);
+          return { pass, score, reason: 'turns with progress recap (✓ and →): ' + withRecap.length + ' / ' + turns.length };
+        metric: progress_recap_present
+        weight: 2
+
+      - type: javascript
+        value: |
+          // The skill's Step 4 closes with "Your first flag is live and
+          // ready to use." We accept the literal line and close
+          // paraphrases that still name the flag as live / ready. Generic
+          // "onboarding complete" / "all set" does NOT count -- the user
+          // needs to be told in plain words that the thing they came for
+          // (a working feature flag) is in place.
+          const text = output.response || '';
+          const patterns = [
+            /your first flag is live and ready to use/i,
+            /first flag is live/i,
+            /flag is live and ready/i,
+            /your (feature )?flag is live/i,
+            /flag is (now )?live/i,
+          ];
+          const matched = patterns.find((re) => re.test(text));
+          const pass = Boolean(matched);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Completion line present: ' + String(text.match(matched) || [''])[0].slice(0, 80) : 'No "flag is live" completion line in final response' };
+        metric: completion_line_present
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: a clean Node.js Express repo with no LaunchDarkly
+          presence and no MCP configured. Per the SKILL.md "Experience
+          Detection" section, this is FULL MODE. The agent runs the whole
+          arc end-to-end: kickoff with welcome + payoff + four-row
+          roadmap, account_status question, MCP setup, SDK install, first
+          flag creation, OFF-state confirmation, toggle ON, completion.
+          The user confirmed each decision point as it came up (account
+          ready, set up MCP, auto install, flag is off) so the arc flows
+          to completion without stalling.
+
+          Full mode requirements (from SKILL.md):
+            - Open with one-sentence welcome + payoff ("flip a switch
+              and watch your app change -- no redeploy, no code push").
+            - Show the four-row roadmap table (Scan / SDK / first flag /
+              MCP).
+            - Narrate BEFORE every action — one sentence stating what's
+              about to happen and why it matters.
+            - Narrate AFTER every stage — one sentence on what was
+              accomplished and what comes next.
+            - Render the mandatory progress recap block ("Progress" title,
+              ✓ for completed stages, → for current stage) on every
+              substantive reply.
+            - Close with the literal Step 4 completion line "Your first
+              flag is live and ready to use." plus next-move
+              suggestions (discovery / targeting / cleanup).
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — `kickoff_text` contains a one-sentence
+              welcome + payoff and the four-row roadmap (as a table or
+              a clear four-item enumeration covering scan / SDK /
+              first flag / MCP).
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              consistently include pre-action narration ("Next: I'll
+              install the SDK.") before meaningful actions and
+              post-action narration ("The SDK is installed.") after
+              them, plus the progress recap block (✓ and → markers) on
+              substantive replies. The recap grows as stages complete.
+              No silent execution between tool calls.
+
+          (3) Value framing — somewhere late in the run (typically the
+              final reply) the agent names the actual payoff — a live
+              feature flag the user can flip from LaunchDarkly and
+              watch change in the app without a redeploy. Generic
+              "onboarding complete" / "all set" does NOT count.
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival with the literal line "Your first flag is live
+              and ready to use." or a very close paraphrase that still
+              names the flag as live/ready. Next-move suggestions
+              (discovery / targeting / cleanup) should follow.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty or the run was terminated
+          before the agent reached any flag work (`terminated` field on
+          the output is set AND no create-flag call is in `tools_called`),
+          score 0.
+        metric: narrative_quality
+        weight: 3
