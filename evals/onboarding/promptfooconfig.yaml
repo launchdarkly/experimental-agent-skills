@@ -3,7 +3,7 @@
 # Run with shared defaults:
 #   promptfoo eval -c ../shared/defaults.yaml -c onboarding/promptfooconfig.yaml
 #
-# The onboarding-scripted skill is the parent orchestrator: it runs a
+# The onboardingV2 skill is the parent orchestrator: it runs a
 # Kickoff phase, four numbered stages (Explore -> Connect (MCP) ->
 # Install (SDK) -> Ship (first flag)), and hands off to nested skills
 # (mcp-configure, sdk-install) at the appropriate stage. Decision
@@ -36,16 +36,16 @@
 #                                   regex.
 #
 # See ../shared/assertions.js for the FIRST/LAST trajectory convention.
-description: "End-to-end evaluation of the onboarding-scripted orchestrator skill"
+description: "End-to-end evaluation of the onboardingV2 orchestrator skill"
 
 prompts:
-  - file://../../skills/onboarding-scripted/SKILL.md
+  - file://../../skills/onboardingV2/SKILL.md
 
 providers:
   - id: file://../providers/claude-skill-agent-sdk.js
     label: claude-skill-agent-sdk
     config:
-      skill_slug: onboarding-scripted
+      skill_slug: onboardingV2
       allow_builtins: true
       expose_mcp_tools: true
       expose_ask_question: true
@@ -235,7 +235,7 @@ tests:
 
           The user said "Onboard me to LaunchDarkly" with a clean Node.js
           Express repo and no existing LaunchDarkly integration. The
-          onboarding-scripted SKILL.md requires the kickoff arc to:
+          onboardingV2 SKILL.md requires the kickoff arc to:
 
           (a) Open with a one-sentence welcome and lead with the payoff
               ("flip a switch and watch your app change -- no redeploy, no
@@ -351,7 +351,7 @@ tests:
         value: |
           The user dropped LaunchDarkly into a pnpm monorepo with three
           packages (packages/api, packages/web, packages/shared). Per the
-          onboarding-scripted SKILL.md Step 1 workspace classification, this
+          onboardingV2 SKILL.md Step 1 workspace classification, this
           is an "Unclear" state: the agent should populate the AskQuestion
           `app_location` form with the candidate paths and stop, not guess
           which package to integrate.
@@ -448,7 +448,7 @@ tests:
           The codebase already has @launchdarkly/node-server-sdk installed and
           fully initialized (LaunchDarkly.init + waitForInitialization is in
           src/launchdarkly.js) and MCP is configured. Per the
-          onboarding-scripted SKILL.md Edge Cases table, the agent should
+          onboardingV2 SKILL.md Edge Cases table, the agent should
           skip Step 3 (SDK install) entirely and proceed to Step 4 (Ship --
           create the first flag).
 
@@ -646,7 +646,7 @@ tests:
 
       - type: llm-rubric
         value: |
-          The user said "Continue onboarding" -- per the onboarding-scripted
+          The user said "Continue onboarding" -- per the onboardingV2
           SKILL.md "Resume After Restart" section, the agent must re-survey
           state silently (probe MCP via a tool call, scan deps for the SDK,
           check for flag-evaluation calls) instead of re-running the kickoff.
@@ -858,7 +858,7 @@ tests:
 
       - type: llm-rubric
         value: |
-          This is Step 4 (Ship -- first flag) in the onboarding-scripted
+          This is Step 4 (Ship -- first flag) in the onboardingV2
           flow. Per the SKILL.md the agent should: (1) create a boolean
           flag (default off, kebab-case key) by calling create-flag
           directly, (2) add a visible flag-gated element to the app, (3)

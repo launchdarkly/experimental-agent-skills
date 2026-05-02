@@ -1,5 +1,5 @@
 ---
-name: scripted-ld-onboard
+name: onboardingV2
 description: "Scripted, branded onboarding for LaunchDarkly. Fixed sequence with LaunchDarkly voice and tone. Enforces step completion before advancing. Redirects drift. Use when the user wants to set up LaunchDarkly from scratch or asks to start onboarding."
 license: Apache-2.0
 compatibility: Requires npx and an MCP-compatible coding agent (Cursor, Claude Code, Windsurf, GitHub Copilot, etc.)
@@ -268,7 +268,7 @@ Before running `npx`, check whether `mcp-configure` is already installed locally
 If it is not installed locally, install it:
 
 ```bash
-npx skills add launchdarkly-labs/agent-skills/plugins/launchdarkly/skills --skill mcp-configure -y --agent <detected-agent>
+npx skills add launchdarkly/experimental-agent-skills --skill mcp-configure -y --agent <detected-agent>
 ```
 
 If `npx skills add` fails for any reason (sandbox restriction, clone error, skill name not found), do not retry. Fall back to checking `~/.agents/skills/` and `~/.cursor/skills/` for a locally cached copy. If none is found, follow the `mcp-configure` workflow inline using [MCP Config Templates](references/mcp-config-templates.md) directly.
@@ -320,7 +320,7 @@ If `sdk_install_mode` is `auto`: proceed with installation below.
 Install `sdk-install` now:
 
 ```bash
-npx skills add launchdarkly-labs/agent-skills/plugins/launchdarkly/skills --skill sdk-install -y --agent <detected-agent>
+npx skills add launchdarkly/experimental-agent-skills --skill sdk-install -y --agent <detected-agent>
 ```
 
 Hand off to the `sdk-install` skill using the stack context from Step 1.
@@ -412,7 +412,7 @@ If they insist: respect it, note what was skipped, and state the dependency risk
 
 | Repo | Skills | Purpose |
 |------|--------|---------|
-| `launchdarkly-labs/agent-skills` | `onboarding-scripted`, `sdk-install`, `mcp-configure` | Getting started / setup |
+| `launchdarkly/experimental-agent-skills` | `onboardingV2`, `sdk-install`, `mcp-configure` | Getting started / setup |
 | `launchdarkly/agent-skills` | `launchdarkly-flag-create`, `launchdarkly-flag-discovery`, `launchdarkly-flag-targeting`, `launchdarkly-flag-cleanup` | Flag management |
 
 ---

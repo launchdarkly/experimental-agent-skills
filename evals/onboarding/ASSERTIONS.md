@@ -4,7 +4,7 @@ A peer-readable breakdown of every assertion in the onboarding eval suite. Each 
 
 The actual checks live in [`promptfooconfig.yaml`](./promptfooconfig.yaml); this file is the plain-English version for review.
 
-This suite covers the `onboarding-scripted` skill at `skills/onboarding-scripted/SKILL.md` — a parent orchestrator with a Kickoff phase, four numbered stages (Step 1 Explore, Step 2 Connect / MCP, Step 3 Install / SDK, Step 4 Ship / first flag), and inline `AskQuestion` decision points (`account_status` at kickoff, `app_location` for unclear workspaces, `mcp_decision` before MCP setup, `sdk_install_mode` before SDK install, `off_state_confirmed` before the first toggle).
+This suite covers the `onboardingV2` skill at `skills/onboardingV2/SKILL.md` — a parent orchestrator with a Kickoff phase, four numbered stages (Step 1 Explore, Step 2 Connect / MCP, Step 3 Install / SDK, Step 4 Ship / first flag), and inline `AskQuestion` decision points (`account_status` at kickoff, `app_location` for unclear workspaces, `mcp_decision` before MCP setup, `sdk_install_mode` before SDK install, `off_state_confirmed` before the first toggle).
 
 ---
 
@@ -15,7 +15,7 @@ If you've never used promptfoo, this section is the one to skim first. The rest 
 ### The eval pipeline at a glance
 
 1. **A test** = one scenario (`vars`: user request + codebase context + per-test knobs like `max_turns`).
-2. **The provider** runs the agent against that scenario in an isolated temp directory with the onboarding-scripted skill loaded and our mocked LaunchDarkly MCP tools wired up. **No real LaunchDarkly API calls happen** — every tool returns canned data so runs are deterministic and free of side-effects on real projects.
+2. **The provider** runs the agent against that scenario in an isolated temp directory with the onboardingV2 skill loaded and our mocked LaunchDarkly MCP tools wired up. **No real LaunchDarkly API calls happen** — every tool returns canned data so runs are deterministic and free of side-effects on real projects.
 3. **The provider returns** a structured envelope: `response`, `first_assistant_text`, `trajectory` (every MCP tool call with its arguments), `tools_called` (just the names, in order), `turn_count`, and `terminated` (null on success, else the SDK termination reason like `"error_max_turns"`).
 4. **Each assertion** in the test runs against that envelope and reports `{ pass, score (0.0-1.0), reason }`.
 5. **The test's overall score** is the weighted average of all its assertions. The test "passes" only if **every** assertion passes.
@@ -87,7 +87,7 @@ Set once in `providers[0].config`:
 
 | Flag | What it does |
 |---|---|
-| `skill_slug: onboarding-scripted` | Which skill to load into the agent's context. The provider auto-resolves `skills/onboarding-scripted/`. |
+| `skill_slug: onboardingV2` | Which skill to load into the agent's context. The provider auto-resolves `skills/onboardingV2/`. |
 | `allow_builtins: true` | Exposes Read/Write/Bash/Edit/Grep/Glob/TodoWrite. The skill needs them for Step 1 (codebase scan), Step 2 (`npx skills add` for `mcp-configure`), and Step 3 (`npx skills add` for `sdk-install`). |
 | `expose_mcp_tools: true` | Registers the 24 mocked LaunchDarkly MCP tools as an in-process MCP server. Needed for the Step 2 post-MCP probe, the Step 4 first-flag flow, and the Resume re-survey. |
 | `expose_ask_question: true` | Registers a second in-process MCP server (`harness-ux`) with one tool, `ask-question`, that mirrors the IDE's structured-question shape. The skill calls this at kickoff (`account_status`), in Step 1 (`app_location` for unclear workspaces), Step 2 (`mcp_decision`), Step 3 (`sdk_install_mode`), and Step 4 (`off_state_confirmed`). |
