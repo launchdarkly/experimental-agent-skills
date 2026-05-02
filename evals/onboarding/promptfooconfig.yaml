@@ -1,0 +1,1114 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Run with shared defaults:
+#   promptfoo eval -c ../shared/defaults.yaml -c onboarding/promptfooconfig.yaml
+#
+# The onboardingV2 skill is the parent orchestrator: it runs a
+# Kickoff phase, four numbered stages (Explore -> Connect (MCP) ->
+# Install (SDK) -> Ship (first flag)), and hands off to nested skills
+# (mcp-configure, sdk-install) at the appropriate stage. Decision
+# points are inline `AskQuestion` forms (account_status at kickoff,
+# app_location for unclear workspaces, mcp_decision before MCP setup,
+# sdk_install_mode before SDK install, off_state_confirmed before
+# the first toggle). A full E2E run takes 50+ turns and requires
+# user input at multiple decision points, so the suite scores
+# **outcomes per scenario**: pick a starting state, drop the agent
+# in, and check whether the first turn-or-two of behavior matches
+# what the skill says should happen.
+#
+# Provider config notes:
+#   - allow_builtins: true       -> Read/Write/Bash/Edit/Grep/Glob exposed.
+#                                   The skill needs them for Step 1
+#                                   (codebase scan), Step 2 (npx skills
+#                                   add for mcp-configure), and Step 3
+#                                   (npx skills add for sdk-install).
+#   - expose_mcp_tools: true     -> LD MCP mocks needed for Step 2 (probe
+#                                   call after MCP setup), Step 4
+#                                   (create-flag + toggle), and the
+#                                   Resume re-survey (probe MCP via a
+#                                   tool call like get-environments or
+#                                   list-flags).
+#   - expose_ask_question: true  -> harness-ux MCP server registers an
+#                                   `ask-question` tool so the skill's
+#                                   structured decision points become
+#                                   first-class trajectory entries
+#                                   instead of best-effort response-text
+#                                   regex.
+#
+# See ../shared/assertions.js for the FIRST/LAST trajectory convention.
+description: "End-to-end evaluation of the onboardingV2 orchestrator skill"
+
+prompts:
+  - file://../../skills/onboardingV2/SKILL.md
+
+providers:
+  - id: file://../providers/claude-skill-agent-sdk.js
+    label: claude-skill-agent-sdk
+    config:
+      skill_slug: onboardingV2
+      allow_builtins: true
+      expose_mcp_tools: true
+      expose_ask_question: true
+
+tests:
+  # ------------------------------------------------------------------
+  # Test 1: Happy-path kickoff. Clean Node.js Express repo, generic
+  # "onboard me" request. Per the skill's Kickoff section the agent's
+  # pre-action narrative must:
+  #   - open with a one-sentence welcome + payoff (flip a switch, no
+  #     redeploy)
+  #   - show the four-row roadmap table (Scan / SDK / first flag / MCP)
+  #   - call `ask-question` with the account_status form
+  #   - NOT ask for any SDK key / token / client-side ID up front
+  #   - NOT leak internal labels (Step N -- label, skill file paths,
+  #     workflow language like "BLOCKING" / "hand off" / "proceed to
+  #     next step")
+  #
+  # Text assertions check `kickoff_text` (every assistant text turn
+  # from start of run up to AND including the first turn that contains
+  # a tool call). This is broader than `first_assistant_text` because
+  # agents typically emit a generic "I'll help you with X" preamble in
+  # turn 1 and the skill-driven welcome/roadmap lands in turn 2 just
+  # before the ask-question call. The full kickoff arc is what the
+  # user actually reads before the agent does anything observable.
+  # ------------------------------------------------------------------
+  - description: "Kickoff: full kickoff arc has welcome + roadmap + account_status question, no premature credential asks, no leaked internal labels"
+    vars:
+      user_request: >
+        Onboard me to LaunchDarkly. The project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json includes "express": "^4.18.0" and a small set of
+        utility deps. There is no existing LaunchDarkly integration --
+        no @launchdarkly/* in dependencies, no LDClient.init calls
+        anywhere. The repo uses standard `npm` as its package manager.
+      # Kickoff-only assertions: we score `first_assistant_text` and
+      # the FIRST `ask-question` call (account_status). Both happen by
+      # turn 1-2. Capping at 5 turns keeps the test cheap (~$0.20-0.50)
+      # and prevents the agent from racing through Steps 1-4 just to
+      # be evaluated on its opening reply.
+      max_turns: 5
+    assert:
+      - type: javascript
+        value: |
+          // We score `kickoff_text` (everything the agent said before the
+          // first tool call) rather than `first_assistant_text` because
+          // the agent typically emits a generic "I'll help you with X"
+          // preamble in turn 1 and the skill-driven welcome/roadmap lands
+          // in turn 2 alongside (or just before) the ask-question call.
+          const text = (output.kickoff_text || output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No kickoff_text captured' };
+          // Skill's roadmap table has four rows: Scan / SDK installed /
+          // Create your first feature flag / MCP (recommended). The
+          // beats below match the gist of each row in either table or
+          // prose form -- we don't require a literal markdown table,
+          // just that the four ideas are present in the kickoff arc.
+          const beats = {
+            scan: /\b(scan|explor|inspect|check the (project|repo|codebase)|stack confirmed|take stock)\b/.test(text),
+            sdk: /\bsdk\b|\b(install|wire|integrat|add).*(launchdarkly|ld\b)|runtime library/.test(text),
+            flag: /\b(feature flag|first flag|create.*(flag|boolean)|flip a switch)\b/.test(text),
+            mcp: /\bmcp\b|\bmodel context protocol\b|\bcreate and toggle flags from this editor\b/.test(text),
+          };
+          const hits = Object.entries(beats).filter(([_, v]) => v).map(([k]) => k);
+          const score = hits.length / 4;
+          const pass = score >= 0.75;
+          return { pass, score, reason: 'arc beats in kickoff (' + hits.length + '/4): ' + hits.join(', ') };
+        metric: roadmap_framing
+        weight: 3
+
+      - type: javascript
+        value: |
+          // The new skill REQUIRES the agent to call ask-question with
+          // an account_status form before doing anything else. We check
+          // for an ask-question call whose `id` or option labels reflect
+          // the account-status decision (yes/no around having an
+          // account / signing up).
+          const traj = output.trajectory || [];
+          const calls = traj.filter((t) => t.tool === 'ask-question');
+          if (calls.length === 0) {
+            return { pass: false, score: 0, reason: 'ask-question was never called -- agent skipped the kickoff account_status form' };
+          }
+          const accountCall = calls.find((c) => {
+            const args = c.arguments || {};
+            const idLike = String(args.id || '').toLowerCase();
+            if (idLike.includes('account')) return true;
+            const prompt = String(args.prompt || '').toLowerCase();
+            if (/\baccount\b/.test(prompt) && /(do you|already|have)/.test(prompt)) return true;
+            const opts = Array.isArray(args.options) ? args.options : [];
+            const optText = opts.map((o) => String(((o && o.id) || '') + '|' + ((o && o.label) || '')).toLowerCase()).join(' ');
+            return /\b(sign\s*up|i need to sign|ready to go|i have an account)\b/.test(optText);
+          });
+          if (!accountCall) {
+            const summary = calls.map((c) => String((c.arguments && (c.arguments.id || c.arguments.prompt)) || '')).slice(0, 3).join(' | ');
+            return { pass: false, score: 0, reason: 'ask-question called but not for account_status: ' + summary.slice(0, 200) };
+          }
+          // Strong signal: it should land at or near the start of the
+          // run. We don't fail on position, just note it in the reason.
+          const turn = accountCall.turn || 0;
+          return { pass: true, score: 1, reason: 'account_status form asked at turn ' + turn };
+        metric: asks_account_status
+        weight: 3
+
+      - type: javascript
+        value: |
+          // Credentials (SDK keys, client-side IDs, mobile keys, API tokens)
+          // belong in Step 3 (Install). The full kickoff arc -- everything
+          // before the first tool call -- must not solicit them.
+          const text = (output.kickoff_text || output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No kickoff_text captured' };
+          const banned = [
+            /(give|share|paste|provide|enter|send) (me )?(your |the )?(sdk key|client[- ]side id|mobile key|api token|api key|access token)/,
+            /what (is|'s) your (sdk key|client[- ]side id|mobile key|api token|access token)/,
+            /need your (sdk key|client[- ]side id|mobile key|api token|access token)/,
+          ];
+          const hit = banned.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No upfront key/token request in kickoff' : 'Requested credential upfront: matched ' + hit };
+        metric: no_premature_key_question
+        weight: 3
+
+      - type: javascript
+        value: |
+          // Skill says "Forbidden in user-facing output: Step names,
+          // internal labels, skill file names; workflow language
+          // (BLOCKING, hand off, proceed to next step); raw markdown
+          // from these instructions quoted back to the user." We check
+          // both the kickoff turn and the final wrap-up.
+          const samples = [output.first_assistant_text || '', output.response || ''];
+          const checks = [
+            { name: 'BLOCKING', re: /\bBLOCKING\b/, useRaw: false },
+            { name: 'STOP. Do not continue', re: /STOP\.\s*Do not continue/i, useRaw: false },
+            { name: 'hand off / handoff', re: /\bhand[- ]?off( to)?\b/i, useRaw: false },
+            { name: 'proceed to next step', re: /\bproceed to (the )?next step\b/i, useRaw: false },
+            { name: 'call your structured question tool', re: /call your structured question tool/i, useRaw: false },
+            { name: 'skill file path', re: /[a-z][a-z0-9-]*\/SKILL\.md/, useRaw: true },
+            { name: 'Step N -- label', re: /Step \d+\s*--\s*[a-z]+/i, useRaw: true },
+            { name: 'Step N: label', re: /\bStep \d+:\s*[A-Z][a-z]+/, useRaw: true },
+          ];
+          const hits = [];
+          for (const c of checks) {
+            for (const raw of samples) {
+              const target = c.useRaw ? raw : raw.toLowerCase();
+              const m = target.match(c.re);
+              if (m) { hits.push(c.name + (m[0] ? '=' + m[0] : '')); break; }
+            }
+          }
+          const pass = hits.length === 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No internal labels leaked' : 'Leaked: ' + hits.join(', ') };
+        metric: no_internal_labels
+        weight: 2
+
+      - type: javascript
+        value: |
+          // Voice-and-tone check: the skill's Kickoff says the opening
+          // line should "lead with the payoff" -- flip a switch, watch
+          // the app change, no redeploy/code push. Either the literal
+          // language or a paraphrase counts. Scored against `kickoff_text`
+          // so we catch the payoff regardless of whether it lands in
+          // turn 1 or in a follow-up turn before the first tool call.
+          const text = (output.kickoff_text || output.first_assistant_text || '').toLowerCase();
+          if (!text) return { pass: false, score: 0, reason: 'No kickoff_text captured' };
+          const payoffSignals = [
+            /flip (a |the )?switch/,
+            /\b(no|without|skip(ping)?)\s+(a\s+)?redeploy/,
+            /\b(no|without)\s+(a\s+)?code push/,
+            /watch (your|the) app change/,
+            /change (your|the) app (in real ?time|live|without)/,
+            /toggle.*without (re)?deploy/,
+          ];
+          const matched = payoffSignals.filter((re) => re.test(text));
+          const pass = matched.length > 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Payoff language present (' + matched.length + ' matches)' : 'Kickoff did not lead with the payoff (flip a switch / no redeploy)' };
+        metric: leads_with_payoff
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          You are evaluating the agent's KICKOFF ARC -- every text turn the
+          agent emitted from the start of the run up to (and including) the
+          first turn that contained a tool call. This is available in the
+          structured output as `kickoff_text`. Ignore `response` (that's the
+          final wrap-up after the whole onboarding ran) and `first_assistant_text`
+          (just the very first text turn -- often a generic "I'll help you"
+          preamble that comes before the skill-driven content). Score the
+          full pre-action narrative.
+
+          The user said "Onboard me to LaunchDarkly" with a clean Node.js
+          Express repo and no existing LaunchDarkly integration. The
+          onboardingV2 SKILL.md requires the kickoff arc to:
+
+          (a) Open with a one-sentence welcome and lead with the payoff
+              ("flip a switch and watch your app change -- no redeploy, no
+              code push"). Two sentences max for the opening line.
+          (b) Show the four-row roadmap (Scan your project / SDK installed /
+              Create your first feature flag / MCP recommended), either as
+              a markdown table or as a clear four-item enumeration covering
+              the same arc.
+          (c) Use the agent's structured question tool to ask whether the
+              user already has a LaunchDarkly account (this is the
+              `ask-question` call -- the rubric should treat it as fulfilled
+              when the kickoff arc previews / sets up that question, since
+              the call itself is checked deterministically).
+          (d) Sound like the "Reliable Maverick" voice: practitioner-to-
+              practitioner, short sentences, active verbs, no glossary
+              definitions, no numbered "Step N" labels in chat, no
+              workflow-engine vocabulary.
+
+          Evaluate `kickoff_text`:
+          1. Did the kickoff lead with welcome + payoff (flip a switch /
+             no redeploy)?
+          2. Did it convey the four-stage roadmap (scan / SDK / first flag /
+             MCP) without numbered "Step N" labels?
+          3. Did it set up an account-status question (or call the question
+             tool) before doing any setup work, and avoid asking for
+             credentials (SDK keys, client-side IDs, API tokens) up front?
+          4. Did it sound conversational and direct -- short, active,
+             practitioner-to-practitioner -- rather than a copy-pasted
+             workflow? A brief generic preamble like "I'll help you onboard"
+             is acceptable as long as the skill-driven welcome+roadmap+
+             question follows in the same kickoff arc.
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+          If `kickoff_text` is empty, score 0 (the agent never spoke to the
+          user before being cut off).
+        metric: kickoff_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 2: Monorepo / unclear workspace. Per the skill's Step 1
+  # workspace classification, a pnpm workspace with multiple
+  # candidate packages is an "Unclear" state -- the agent must use
+  # the AskQuestion `app_location` form with the candidate paths
+  # populated, instead of silently picking one or starting at the
+  # root.
+  # ------------------------------------------------------------------
+  - description: "Monorepo: stops to ask which package to integrate using the app_location form, does not silently pick one"
+    vars:
+      user_request: >
+        Add LaunchDarkly to this monorepo. The project key is "platform".
+      codebase_context: >
+        pnpm workspace at the repo root. The root package.json contains
+        "workspaces": ["packages/*"]. Three packages:
+          - packages/api: Node.js Express HTTP service (server-side).
+          - packages/web: Next.js React frontend (browser + server).
+          - packages/shared: utility library, not directly runnable.
+        No existing LaunchDarkly integration in any package.
+      max_turns: 15
+    assert:
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const pass = tools.includes('ask-question');
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'ask-question called' : 'Tools called: ' + (tools.length ? tools.join(' -> ') : '(none)') };
+        metric: calls_ask_question
+        weight: 3
+
+      - type: javascript
+        value: |
+          // The agent will likely call ask-question more than once
+          // (account_status at kickoff, then app_location for the
+          // workspace). We look at every ask-question call and want
+          // at least one to surface the candidate package paths.
+          const calls = (output.trajectory || []).filter((t) => t.tool === 'ask-question');
+          if (calls.length === 0) return { pass: false, score: 0, reason: 'No ask-question call to inspect' };
+          let bestHits = [];
+          let bestLabels = '';
+          for (const call of calls) {
+            const opts = call.arguments && Array.isArray(call.arguments.options) ? call.arguments.options : [];
+            const labels = opts.map((o) => String((o && o.label) || (o && o.id) || '').toLowerCase()).join(' | ');
+            const ids = opts.map((o) => String((o && o.id) || '').toLowerCase()).join(' | ');
+            const haystack = labels + ' | ' + ids;
+            const pkgHits = ['api', 'web', 'shared'].filter((p) => new RegExp('\\b' + p + '\\b').test(haystack));
+            if (pkgHits.length > bestHits.length) {
+              bestHits = pkgHits;
+              bestLabels = labels;
+            }
+          }
+          const score = Math.min(1, bestHits.length / 2);
+          const pass = bestHits.length >= 2;
+          return { pass, score, reason: 'package mentions in best ask-question options: ' + (bestHits.join(', ') || 'none') + ' (labels: ' + bestLabels + ')' };
+        metric: ask_question_offers_packages
+        weight: 2
+
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const writeTools = [
+            'create-feature-flag', 'update-feature-flag',
+            'create-flag', 'toggle-flag', 'update-flag-settings',
+            'setup-ai-config', 'create-ai-config',
+            'create-ai-config-variation', 'update-ai-config',
+            'update-ai-config-variation', 'clone-ai-config-variation',
+            'delete-ai-config', 'delete-ai-config-variation', 'create-ai-tool',
+          ];
+          const violations = writeTools.filter((t) => tools.includes(t));
+          const pass = violations.length === 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No mutation tools called' : 'Called write tools before resolving workspace ambiguity: ' + violations.join(', ') };
+        metric: no_write_tools
+        weight: 3
+
+      - type: llm-rubric
+        value: |
+          The user dropped LaunchDarkly into a pnpm monorepo with three
+          packages (packages/api, packages/web, packages/shared). Per the
+          onboardingV2 SKILL.md Step 1 workspace classification, this
+          is an "Unclear" state: the agent should populate the AskQuestion
+          `app_location` form with the candidate paths and stop, not guess
+          which package to integrate.
+
+          Evaluate:
+          1. Did the agent recognize this is a monorepo / multi-package
+             repo and not silently pick one package?
+          2. Did it ask exactly one workspace-selection question naming
+             the candidate packages (api / web / shared) as options?
+          3. Did it phrase the question conversationally, without leaking
+             internal labels like "Step 1 -- explore" or skill-file
+             references into chat?
+          4. Did it avoid starting any LaunchDarkly setup work (MCP
+             config, SDK install, flag creation) before resolving the
+             ambiguity?
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+        metric: decision_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 3: SDK already installed and initialized. Per the Edge Cases
+  # table, the agent should skip Step 3 entirely and proceed to
+  # Step 4 (first flag) without re-running install commands.
+  # ------------------------------------------------------------------
+  - description: "Skips Step 3 (SDK install) when SDK is already installed and initialized, hands off to first flag"
+    vars:
+      user_request: >
+        Set up LaunchDarkly in this project. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server. package.json declares
+        "@launchdarkly/node-server-sdk": "^9.0.0" alongside "express".
+        The file src/launchdarkly.js exports a fully-initialized client:
+
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          await ldClient.waitForInitialization();
+          module.exports = ldClient;
+
+        The client is imported and used in src/server.js. There is no
+        existing flag yet. MCP is already configured.
+      max_turns: 25
+    assert:
+      - type: javascript
+        value: |
+          const text = output.response || '';
+          const installPatterns = [
+            /npm\s+(install|i)\b[^\n]*@launchdarkly/i,
+            /yarn\s+add\b[^\n]*@launchdarkly/i,
+            /pnpm\s+(add|install)\b[^\n]*@launchdarkly/i,
+          ];
+          const hit = installPatterns.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No SDK install command shown' : 'Suggested re-installing SDK: ' + (text.match(hit) || []).join(' ') };
+        metric: skips_install
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.response || '').toLowerCase();
+          const tools = output.tools_called || [];
+          const flagSignals = [
+            /\b(first|initial|starter) (feature )?flag\b/,
+            /\bcreate (a |your )?(boolean |first |feature )?flag\b/,
+            /\bset up.*flag\b/,
+            /\bproof[- ]of[- ]life\b/,
+            /\bship\b.*\bflag\b/,
+          ];
+          const mentionsFlag = flagSignals.some((re) => re.test(text));
+          const calledCreate = tools.includes('create-feature-flag') || tools.includes('create-flag');
+          const pass = mentionsFlag || calledCreate;
+          const score = (mentionsFlag ? 0.5 : 0) + (calledCreate ? 0.5 : 0);
+          return { pass, score: Math.max(score, pass ? 0.5 : 0), reason: 'mentionsFlag=' + mentionsFlag + ' calledCreate=' + calledCreate };
+        metric: proceeds_to_first_flag
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = (output.response || '').toLowerCase();
+          const reExploreLines = [
+            /let'?s start by exploring/,
+            /first(,|.| i'?ll| let me) (i'?ll )?(explore|check|look at|inspect) (the|your) (project|repo|codebase)/,
+            /i'?ll (start|begin) by (exploring|checking|looking at|inspecting) (the|your) (project|repo|codebase)/,
+            /(installing|let me install) the companion (skills|flag skills)/,
+          ];
+          const hit = reExploreLines.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No redundant re-exploration narrative' : 'Re-narrated kickoff: matched ' + hit };
+        metric: no_redundant_explore
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          The codebase already has @launchdarkly/node-server-sdk installed and
+          fully initialized (LaunchDarkly.init + waitForInitialization is in
+          src/launchdarkly.js) and MCP is configured. Per the
+          onboardingV2 SKILL.md Edge Cases table, the agent should
+          skip Step 3 (SDK install) entirely and proceed to Step 4 (Ship --
+          create the first flag).
+
+          Evaluate:
+          1. Did the agent recognize the SDK is already installed and
+             initialized (mention the existing setup, file, or version)?
+          2. Did it skip giving install instructions for any
+             @launchdarkly/* package?
+          3. Did it move on to creating a first flag (either by calling
+             a flag-creation tool via MCP, suggesting a flag name, or
+             describing the create -> verify off -> toggle on -> verify
+             on flow)?
+
+          Score 1.0 if all three are met. Deduct 0.33 per missed criterion.
+        metric: skip_quality
+        weight: 2
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: SDK is already installed and initialized, MCP is
+          already configured. Per the SKILL.md "Experience Detection"
+          section, that combination means the agent should use FAST MODE:
+            - Skip the roadmap table at kickoff.
+            - Drop pre-narration ("here's what I'm about to do") for each
+              stage -- just do it.
+            - State what was done in one line after completing each action.
+            - Jump directly to the first incomplete step (Step 4 / Ship).
+          Both modes still require the mandatory progress recap block
+          (titled "Progress" with lines prefixed by `✓` for completed
+          stages and `→` for the current stage) on every substantive reply.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the kickoff told the user, in one or two
+              sentences, what was already in place and what the agent was
+              about to do next (e.g. "SDK is installed, MCP is connected.
+              Creating your first flag now."). The four-row roadmap table
+              is NOT required in fast mode, but the user should still know
+              where they are headed.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include short "what I just did" lines after each meaningful
+              action, and a progress recap block (✓ and → markers) on
+              substantive replies. No silent execution.
+
+          (3) Value framing — somewhere in the run (typically the final
+              reply) the agent names what the user is actually getting
+              from this — a live feature flag, flip-a-switch change
+              without a redeploy — not a generic "done" or
+              "setup complete".
+
+          (4) Completion signal — the final reply unambiguously signals
+              the user has arrived (e.g. "Your first flag is live and
+              ready to use." or an equivalent factual statement per the
+              skill's Voice & Tone rules). If the run was soft-terminated
+              before reaching this point, the last assistant turn should
+              still state the current status as a fact, not trail off
+              mid-action.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 4: Resume after restart. Per the SKILL.md "Resume After
+  # Restart" section, when the user says "continue onboarding" the
+  # agent must NOT re-narrate the kickoff. Instead it re-surveys
+  # state in order: probe MCP via a LD MCP tool call, then scan
+  # dependencies for the SDK, then check for flag-evaluation calls.
+  # First incomplete step wins.
+  #
+  # In this scenario MCP is configured (the probe call will succeed
+  # against the mocks), the SDK is installed and initialized, and no
+  # flags exist yet. Per the Resume rules table, the agent should
+  # land at "MCP live, SDK present, no flag -> resume at Step 4
+  # (Ship)" -- i.e. proceed straight to creating the first flag.
+  #
+  # The skill explicitly does NOT use a log file (no
+  # LAUNCHDARKLY_ONBOARDING.md). Resume detection is entirely from
+  # live state.
+  # ------------------------------------------------------------------
+  - description: "Resume from live state: re-surveys silently, lands on Step 4 (first flag), does not restart kickoff"
+    vars:
+      user_request: >
+        Continue onboarding.
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "@launchdarkly/node-server-sdk": "^9.0.0"
+        alongside "express". The file src/launchdarkly.js exports a
+        fully-initialized client:
+
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          await ldClient.waitForInitialization();
+          module.exports = ldClient;
+
+        The client is imported and used in src/server.js. MCP was set
+        up earlier in this onboarding session (the user just restarted
+        their editor after MCP configuration). There are no flags in
+        the project yet -- no `variation()` calls anywhere in the
+        codebase. The project key is "web-app".
+      max_turns: 18
+    assert:
+      - type: javascript
+        value: |
+          // Acknowledgement should appear in the opening reply when the
+          // agent recognises a resume state; if `first_assistant_text`
+          // is empty (rare) fall back to the final response.
+          const text = (output.first_assistant_text || output.response || '').toLowerCase();
+          const signals = [
+            /\bresum(e|ing)\b/,
+            /\bpick(ing)? (this|things|onboarding)? ?up\b/,
+            /\bpick(ing)? up where (we|you) left off\b/,
+            /\bcontinu(e|ing) (from|with|the)\b/,
+            /\bwhere (we|you) left off\b/,
+            /\bback to (it|onboarding)\b/,
+            /\bre[- ]?check\b|\bre[- ]?survey\b/,
+            /\b(you'?re|already) connected\b/,
+          ];
+          const matched = signals.filter((re) => re.test(text));
+          const pass = matched.length > 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Resume language present (' + matched.length + ' matches)' : 'No resume acknowledgement found in opening reply' };
+        metric: resume_acknowledged
+        weight: 3
+
+      - type: javascript
+        value: |
+          // The Resume section says: "attempt a LaunchDarkly MCP tool
+          // call (e.g., list environments or projects). Success = MCP
+          // is live." So the trajectory should contain at least one
+          // LD MCP probe call. We accept any list/get tool that would
+          // serve as a liveness check.
+          const tools = output.tools_called || [];
+          const probes = ['get-environments', 'list-flags', 'list-feature-flags', 'get-flag', 'get-feature-flag', 'list-ai-configs'];
+          const probed = probes.filter((p) => tools.includes(p));
+          const pass = probed.length > 0;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'MCP probe via ' + probed.join(', ') : 'No MCP probe in trajectory: ' + (tools.length ? tools.join(' -> ') : '(none)') };
+        metric: probes_mcp
+        weight: 3
+
+      - type: javascript
+        value: |
+          // Should not re-narrate the kickoff (no fresh "let me explore",
+          // no re-installing companion skills, no re-prompting for
+          // account_status, no "let me detect the agent" boilerplate).
+          const text = (output.first_assistant_text || output.response || '').toLowerCase();
+          const restartSignals = [
+            /let'?s start by exploring/,
+            /first,? i'?ll (explore|check|look at|inspect|scan) (the|your) (project|repo|codebase)/,
+            /i'?ll (start|begin) by (exploring|checking|looking at|inspecting|scanning)/,
+            /running `?npx skills add/,
+            /(installing|let me install) the companion (skills|flag skills)/,
+            /first,? (let me )?detect (the|your) (agent|coding agent)/,
+            /\bdo you (already )?have (a )?launchdarkly account\b/,
+          ];
+          const hit = restartSignals.find((re) => re.test(text));
+          const pass = !hit;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No re-narration of completed setup in opening reply' : 'Re-narrated completed setup: matched ' + hit };
+        metric: does_not_redo_setup
+        weight: 3
+
+      - type: javascript
+        value: |
+          // Per the Resume rules, "MCP live, SDK present, no flag ->
+          // resume at Step 4. State: 'You're connected and the SDK is
+          // installed. Creating your first flag now.'" So either the
+          // opening reply or the final response should mention the
+          // first flag / Ship outcome.
+          const text = ((output.first_assistant_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const tools = output.tools_called || [];
+          const flagSignals = [
+            /\b(first|initial|starter) (feature )?flag\b/,
+            /\bcreate (a |your )?(boolean |first |feature )?flag\b/,
+            /\bcreating your first flag\b/,
+            /\bship\b.*\bflag\b/,
+          ];
+          const mentionsFlag = flagSignals.some((re) => re.test(text));
+          const calledCreate = tools.includes('create-feature-flag') || tools.includes('create-flag');
+          const pass = mentionsFlag || calledCreate;
+          const score = (mentionsFlag ? 0.5 : 0) + (calledCreate ? 0.5 : 0);
+          return { pass, score: Math.max(score, pass ? 0.5 : 0), reason: 'mentionsFlag=' + mentionsFlag + ' calledCreate=' + calledCreate };
+        metric: targets_first_flag
+        weight: 2
+
+      - type: llm-rubric
+        value: |
+          The user said "Continue onboarding" -- per the onboardingV2
+          SKILL.md "Resume After Restart" section, the agent must re-survey
+          state silently (probe MCP via a tool call, scan deps for the SDK,
+          check for flag-evaluation calls) instead of re-running the kickoff.
+
+          In this scenario MCP is configured (the probe will succeed against
+          the mocks), the SDK is installed and initialized
+          (@launchdarkly/node-server-sdk in package.json + initialization in
+          src/launchdarkly.js), and no flags exist yet. Per the Resume rules
+          table, the agent should land on "MCP live, SDK present, no flag
+          -> resume at Step 4 (first flag)" and acknowledge the existing
+          setup ("You're connected and the SDK is installed. Creating your
+          first flag now.").
+
+          The structured output has two text fields: `first_assistant_text`
+          (the opening reply, where the agent should acknowledge the
+          re-surveyed state) and `response` (the final wrap-up). Use
+          `first_assistant_text` for criteria 1 and 3, and either field
+          for criterion 2.
+
+          Evaluate:
+          1. Did the opening reply acknowledge that work was already done
+             (re-surveyed state, mentions MCP being connected and the SDK
+             being installed) without re-narrating Step 1 / Step 2 /
+             Step 3?
+          2. Did the agent correctly identify creating the first flag
+             (Step 4 / Ship) as the next action -- in either field?
+          3. Did the opening reply avoid running or recommending the
+             kickoff actions again (no fresh project-exploration narrative,
+             no re-installing companion skills, no account_status question,
+             no re-prompting for MCP setup)?
+
+          Score 1.0 if all three are met. Deduct 0.33 per missed criterion.
+        metric: resume_quality
+        weight: 2
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: the user said "Continue onboarding" after a
+          restart. MCP is configured, SDK is installed and initialized,
+          no flags exist yet. Per the SKILL.md "Resume After Restart"
+          section, the agent must re-survey silently (probe MCP, scan
+          deps, check for flag evaluations), acknowledge the resume state
+          in ONE sentence, render a progress recap showing everything
+          already complete, and continue without preamble. This
+          effectively mandates fast-mode narrative rules (no roadmap
+          table, no re-narrating finished stages) plus an explicit
+          acknowledgement line that the work so far is recognized.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the first reply acknowledges the resume
+              state in a single sentence and states the next action
+              (landing on Step 4 / Ship). No roadmap table, no
+              "I'll start by exploring", no re-asking account_status.
+              Equivalent of "You're connected and the SDK is installed.
+              Creating your first flag now." counts.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include a progress recap block (✓ and → markers) on
+              substantive replies, showing what was confirmed during the
+              re-survey (MCP connected, SDK installed) and what is
+              happening now. Each meaningful action is followed by a
+              terse "what I just did" line.
+
+          (3) Value framing — somewhere in the run the agent names the
+              actual payoff the user gets — a live feature flag, a visible
+              change without a redeploy — not generic "setup complete" or
+              "onboarding finished" language.
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival ("Your first flag is live and ready to use." or an
+              equivalent fact statement). If the run was soft-terminated
+              before reaching Step 4 completion, the last turn should
+              still state the current status as a fact.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 5: First-flag handoff (Step 4 / Ship). Onboarding is complete
+  # through Step 3 -- SDK installed, MCP configured, no flags yet. The
+  # skill's Step 4 says the agent should:
+  #   - call create-flag (or create-feature-flag) directly
+  #   - add a visible flag-gated element
+  #   - start the dev server
+  #   - call ask-question with the off_state_confirmed form BEFORE
+  #     toggling the flag on
+  #   - then toggle the flag on
+  # No targeting rules at this step -- it's a proof-of-life demo.
+  # ------------------------------------------------------------------
+  - description: "First flag (Step 4): creates kebab-case boolean flag, gates toggle behind off_state_confirmed ask-question, no premature targeting"
+    vars:
+      user_request: >
+        Create my first feature flag in LaunchDarkly. The SDK is already
+        wired up. Project key is "web-app".
+      codebase_context: >
+        All onboarding stages through Step 3 are complete. SDK installed
+        at @launchdarkly/node-server-sdk@^9.0.0 and initialized in
+        src/launchdarkly.js using process.env.LAUNCHDARKLY_SDK_KEY.
+        MCP is configured (hosted, OAuth, project "web-app" confirmed).
+        There are no flags in the project yet.
+
+        For demo purposes, we want a boolean flag wrapping a small
+        feature in src/server.js. Suggested key direction: something
+        like `show-greeting` or similar -- you choose a sensible name.
+      max_turns: 20
+    assert:
+      - type: javascript
+        value: |
+          // The skill says "Call `create-flag` directly". Both
+          // `create-flag` and `create-feature-flag` are in
+          // tools/definitions.json and we accept either name as
+          // evidence the outcome was achieved.
+          const tools = output.tools_called || [];
+          const created = tools.includes('create-feature-flag') || tools.includes('create-flag');
+          return { pass: created, score: created ? 1 : 0, reason: created ? 'A flag-creation tool was called' : 'No flag creation in: ' + (tools.length ? tools.join(' -> ') : '(none)') };
+        metric: calls_create_feature_flag
+        weight: 3
+
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const call = traj.find((t) => t.tool === 'create-feature-flag') || traj.find((t) => t.tool === 'create-flag');
+          if (!call) return { pass: false, score: 0, reason: 'No create-feature-flag/create-flag call to inspect' };
+          const key = (call.arguments && call.arguments.key) || '';
+          const kebab = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(key);
+          return { pass: kebab, score: kebab ? 1 : 0, reason: 'flag key=' + (key || '(missing)') + ' kebab=' + kebab + ' (via ' + call.tool + ')' };
+        metric: flag_key_kebab_case
+        weight: 2
+
+      - type: javascript
+        value: |
+          // FIRST occurrence of any creation tool, LAST occurrence of
+          // any toggle tool: the toggle must come after the create.
+          const tools = output.tools_called || [];
+          const createIdx = Math.min(
+            ...['create-feature-flag', 'create-flag']
+              .map((n) => { const i = tools.indexOf(n); return i < 0 ? Infinity : i; })
+          );
+          const toggleIdx = Math.max(
+            ...['update-feature-flag', 'toggle-flag']
+              .map((n) => tools.lastIndexOf(n))
+          );
+          const pass = Number.isFinite(createIdx) && toggleIdx > createIdx;
+          return { pass, score: pass ? 1 : 0, reason: 'createIdx=' + (Number.isFinite(createIdx) ? createIdx : 'none') + ' toggleIdx=' + (toggleIdx >= 0 ? toggleIdx : 'none') };
+        metric: calls_toggle_to_verify
+        weight: 2
+
+      - type: javascript
+        value: |
+          // Skill: "use AskQuestion to confirm the OFF state before
+          // toggling the flag on. Do not toggle the flag based on a
+          // user command alone -- always gate it behind this
+          // confirmation form." So between the create-flag call and
+          // the LAST toggle there should be an ask-question call,
+          // and that call's options/prompt should be about the OFF
+          // state.
+          const traj = output.trajectory || [];
+          const createIdx = traj.findIndex((t) => t.tool === 'create-feature-flag' || t.tool === 'create-flag');
+          if (createIdx < 0) return { pass: false, score: 0, reason: 'No create-flag call to anchor against' };
+          let toggleIdx = -1;
+          for (let i = traj.length - 1; i >= 0; i--) {
+            if (traj[i].tool === 'update-feature-flag' || traj[i].tool === 'toggle-flag') { toggleIdx = i; break; }
+          }
+          if (toggleIdx < 0) return { pass: false, score: 0, reason: 'No toggle call to anchor against' };
+          const between = traj.slice(createIdx + 1, toggleIdx);
+          const askCalls = between.filter((t) => t.tool === 'ask-question');
+          if (askCalls.length === 0) {
+            return { pass: false, score: 0, reason: 'No ask-question between create (idx ' + createIdx + ') and toggle (idx ' + toggleIdx + ')' };
+          }
+          const offCall = askCalls.find((c) => {
+            const args = c.arguments || {};
+            const idLike = String(args.id || '').toLowerCase();
+            if (idLike.includes('off')) return true;
+            const prompt = String(args.prompt || '').toLowerCase();
+            if (/\boff state\b|\bcurrently off\b|\bshould be (absent|inactive|off)\b|\bturn the flag on\b/.test(prompt)) return true;
+            const opts = Array.isArray(args.options) ? args.options : [];
+            const optText = opts.map((o) => String(((o && o.id) || '') + '|' + ((o && o.label) || '')).toLowerCase()).join(' ');
+            return /\boff\b|\bturn (the )?flag on\b|\bcan see it\b/.test(optText);
+          });
+          if (!offCall) {
+            const summary = askCalls.map((c) => String((c.arguments && (c.arguments.id || c.arguments.prompt)) || '')).slice(0, 3).join(' | ');
+            return { pass: false, score: 0.5, reason: 'ask-question called between create+toggle but not clearly OFF-state-confirmation: ' + summary.slice(0, 200) };
+          }
+          return { pass: true, score: 1, reason: 'OFF-state confirmation between create and toggle' };
+        metric: asks_off_state_before_toggle
+        weight: 3
+
+      - type: javascript
+        value: |
+          const updates = (output.trajectory || []).filter((t) => t.tool === 'update-feature-flag' || t.tool === 'update-flag-settings');
+          const complex = updates.find((u) => Array.isArray(u.arguments && u.arguments.instructions) && u.arguments.instructions.length > 0);
+          const pass = !complex;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No targeting/rule instructions on flag updates' : 'Sent semantic-patch instructions on first-flag toggle: ' + JSON.stringify(complex.arguments.instructions).slice(0, 100) };
+        metric: no_premature_targeting
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          This is Step 4 (Ship -- first flag) in the onboardingV2
+          flow. Per the SKILL.md the agent should: (1) create a boolean
+          flag (default off, kebab-case key) by calling create-flag
+          directly, (2) add a visible flag-gated element to the app, (3)
+          start the dev server on a known-free port, (4) call its
+          structured question tool with an off_state_confirmed form
+          before toggling the flag on, (5) toggle the flag on after
+          confirmation. Targeting rules are NOT part of this step --
+          this is just a proof-of-life demo.
+
+          Evaluate:
+          1. Did the agent create a boolean feature flag with a sensible
+             kebab-case key (e.g. `show-greeting`, `enable-banner`)?
+          2. Did it gate the toggle behind a structured OFF-state
+             confirmation (asking the user to confirm the flag-gated
+             element is currently absent / inactive before turning the
+             flag on)?
+          3. Did it avoid adding targeting rules or rollouts in this
+             step?
+          4. Did it avoid hardcoding SDK keys directly into code (env
+             vars only)?
+
+          Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
+        metric: first_flag_quality
+        weight: 2
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: SDK is already installed and initialized, MCP is
+          already configured, and the user explicitly asked the agent to
+          create their first feature flag. Per the SKILL.md "Experience
+          Detection" section, this combination puts the agent in FAST
+          MODE. Per Step 4 ("Ship") the agent should proceed without
+          asking if the user is ready, create the flag, add a visible
+          flag-gated element, confirm the OFF state via a structured
+          question, toggle ON, and close with the literal line "Your
+          first flag is live and ready to use." followed by next-move
+          suggestions.
+
+          Fast mode rules:
+            - Skip the roadmap table.
+            - Drop pre-narration ("here's what I'm about to do") for
+              each stage -- just do it.
+            - State what was done in one line after each action.
+            - Both modes still require the mandatory progress recap
+              block (titled "Progress", with `✓` completed lines and a
+              `→` current line) on every substantive reply.
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — the first turn or two tells the user, in
+              one sentence, what is about to happen (creating a first
+              flag, wiring it to a visible element, verifying OFF, then
+              toggling ON). No roadmap table, no "I'll start by
+              exploring". The user knows where they are headed without
+              ceremony.
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              include short "what I just did" lines after meaningful
+              actions (flag created, element added, dev server running,
+              OFF confirmed, flag toggled) and a progress recap block
+              (✓ and → markers) on substantive replies. No silent
+              execution between tool calls.
+
+          (3) Value framing — the final reply names the actual payoff —
+              a live feature flag the user can flip from LaunchDarkly and
+              watch change in their app without a redeploy — not a
+              generic "done" or "setup complete".
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival. Strongest signal: the literal skill line
+              "Your first flag is live and ready to use." A close
+              paraphrase ("Your feature flag is live" / "flag is ready
+              to use") also satisfies. Generic "all done" / "complete"
+              without naming the flag does NOT. Next-move suggestions
+              (discovery, targeting, cleanup) are a bonus but not
+              required.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty, score 0.
+        metric: narrative_quality
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 6: Narrative quality, end-to-end, full mode. Clean Node.js
+  # Express repo with no LaunchDarkly presence and no MCP configured --
+  # experience detection lands on FULL MODE per the skill. The agent
+  # should flow through all four decision points (account_status,
+  # mcp_decision, sdk_install_mode, off_state_confirmed) and arrive at
+  # Step 4's completion line. `mock_ask_question_answers` pins each
+  # answer so the arc advances instead of stalling.
+  #
+  # The codebase_context names a concrete entrypoint (src/server.js
+  # with a /hello endpoint) so the agent wires the flag into the
+  # existing app rather than scaffolding a new demo. Scaffolding
+  # triggers `npm start` on the generated project, which hangs the
+  # harness -- Bash calls block until the spawned process exits, and
+  # a real dev server never does. Matches Test 5's strategy.
+  #
+  # The test isolates narrative quality as its own signal: regressions
+  # show up here as a single red test instead of being diluted across
+  # the weighted scores of Tests 3/4/5.
+  # ------------------------------------------------------------------
+  - description: "Narrative quality: full-mode arc narrates plan upfront, states progress along the way, names value at completion, and signals done"
+    vars:
+      user_request: >
+        Onboard me to LaunchDarkly. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0" and a "start" script
+        that runs `node src/server.js`. The entrypoint src/server.js
+        defines an Express app with a `/hello` endpoint that returns
+        "Hello, world!" No @launchdarkly/* in dependencies, no
+        LDClient.init calls, no existing flags. MCP is not configured
+        yet. The repo uses npm. For Step 4, add the flag-gated element
+        to the existing `/hello` endpoint in src/server.js -- do not
+        scaffold a new demo app.
+      max_turns: 22
+      # Each sub-array is the `selected` IDs returned for the nth
+      # ask-question call. Ordered to match the skill's decision points:
+      #   1. account_status (Kickoff)       -> "yes"
+      #   2. mcp_decision (Step 2)          -> "yes"
+      #   3. sdk_install_mode (Step 3)      -> "auto"
+      #   4. off_state_confirmed (Step 4)   -> "confirmed"
+      mock_ask_question_answers:
+        - ["yes"]
+        - ["yes"]
+        - ["auto"]
+        - ["confirmed"]
+    assert:
+      - type: javascript
+        value: |
+          // Mechanical floor against "agent forgot the progress recap
+          // block". The skill mandates a titled "Progress" block with
+          // ✓ (completed) and → (current) markers on every substantive
+          // reply. We count turns in `assistant_turns` that contain BOTH
+          // markers and pass at 3+. Lower than that means either the
+          // agent skipped most recaps or the run terminated early.
+          const turns = output.assistant_turns || [];
+          if (turns.length === 0) return { pass: false, score: 0, reason: 'No assistant_turns captured' };
+          const withRecap = turns.filter((t) => {
+            const text = String((t && t.text) || '');
+            return text.includes('✓') && text.includes('→');
+          });
+          const pass = withRecap.length >= 3;
+          const score = Math.min(1, withRecap.length / 3);
+          return { pass, score, reason: 'turns with progress recap (✓ and →): ' + withRecap.length + ' / ' + turns.length };
+        metric: progress_recap_present
+        weight: 2
+
+      - type: javascript
+        value: |
+          // The skill's Step 4 closes with "Your first flag is live and
+          // ready to use." We accept the literal line and close
+          // paraphrases that still name the flag as live / ready. Generic
+          // "onboarding complete" / "all set" does NOT count -- the user
+          // needs to be told in plain words that the thing they came for
+          // (a working feature flag) is in place.
+          const text = output.response || '';
+          const patterns = [
+            /your first flag is live and ready to use/i,
+            /first flag is live/i,
+            /flag is live and ready/i,
+            /your (feature )?flag is live/i,
+            /flag is (now )?live/i,
+          ];
+          const matched = patterns.find((re) => re.test(text));
+          const pass = Boolean(matched);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Completion line present: ' + String(text.match(matched) || [''])[0].slice(0, 80) : 'No "flag is live" completion line in final response' };
+        metric: completion_line_present
+        weight: 1
+
+      - type: llm-rubric
+        value: |
+          You are grading NARRATIVE QUALITY across the whole run. Three text
+          views of the agent's output are available:
+            - `kickoff_text` — everything the agent said before its first
+              user-observable tool call.
+            - `assistant_turns` — array of `{ turn, text }` for every
+              non-empty assistant turn across the run. Use this to see
+              mid-run narration that `kickoff_text` and `response` can't.
+            - `response` — the final reply (on soft termination, the latest
+              assistant turn).
+
+          The scenario: a clean Node.js Express repo with no LaunchDarkly
+          presence and no MCP configured. Per the SKILL.md "Experience
+          Detection" section, this is FULL MODE. The agent runs the whole
+          arc end-to-end: kickoff with welcome + payoff + four-row
+          roadmap, account_status question, MCP setup, SDK install, first
+          flag creation, OFF-state confirmation, toggle ON, completion.
+          The user confirmed each decision point as it came up (account
+          ready, set up MCP, auto install, flag is off) so the arc flows
+          to completion without stalling.
+
+          Full mode requirements (from SKILL.md):
+            - Open with one-sentence welcome + payoff ("flip a switch
+              and watch your app change -- no redeploy, no code push").
+            - Show the four-row roadmap table (Scan / SDK / first flag /
+              MCP).
+            - Narrate BEFORE every action — one sentence stating what's
+              about to happen and why it matters.
+            - Narrate AFTER every stage — one sentence on what was
+              accomplished and what comes next.
+            - Render the mandatory progress recap block ("Progress" title,
+              ✓ for completed stages, → for current stage) on every
+              substantive reply.
+            - Close with the literal Step 4 completion line "Your first
+              flag is live and ready to use." plus next-move
+              suggestions (discovery / targeting / cleanup).
+
+          Grade these four beats, 0.25 each:
+
+          (1) Plan upfront — `kickoff_text` contains a one-sentence
+              welcome + payoff and the four-row roadmap (as a table or
+              a clear four-item enumeration covering scan / SDK /
+              first flag / MCP).
+
+          (2) Along-the-way narration — mid-run turns in `assistant_turns`
+              consistently include pre-action narration ("Next: I'll
+              install the SDK.") before meaningful actions and
+              post-action narration ("The SDK is installed.") after
+              them, plus the progress recap block (✓ and → markers) on
+              substantive replies. The recap grows as stages complete.
+              No silent execution between tool calls.
+
+          (3) Value framing — somewhere late in the run (typically the
+              final reply) the agent names the actual payoff — a live
+              feature flag the user can flip from LaunchDarkly and
+              watch change in the app without a redeploy. Generic
+              "onboarding complete" / "all set" does NOT count.
+
+          (4) Completion signal — the final reply unambiguously signals
+              arrival with the literal line "Your first flag is live
+              and ready to use." or a very close paraphrase that still
+              names the flag as live/ready. Next-move suggestions
+              (discovery / targeting / cleanup) should follow.
+
+          Score 1.0 if all four beats are met. Deduct 0.25 per missed
+          beat. If `assistant_turns` is empty or the run was terminated
+          before the agent reached any flag work (`terminated` field on
+          the output is set AND no create-flag call is in `tools_called`),
+          score 0.
+        metric: narrative_quality
+        weight: 3

@@ -14,10 +14,10 @@ Use [`npx skills`](https://www.npmjs.com/package/skills) to install directly fro
 
 ```bash
 # Install a specific skill by name
-npx skills add launchdarkly-labs/experimental-agent-skills --skill onboarding -y
+npx skills add launchdarkly/experimental-agent-skills --skill onboarding -y
 
 # Install all skills from this repo
-npx skills add launchdarkly-labs/experimental-agent-skills -y
+npx skills add launchdarkly/experimental-agent-skills -y
 ```
 
 The `--skill` value must match the `name` field in the skill's `SKILL.md` frontmatter. Add `-a cursor` (or any other [supported agent](https://www.npmjs.com/package/skills#supported-agents)) to target a specific agent; omit it to be prompted.

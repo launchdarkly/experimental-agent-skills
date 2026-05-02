@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Shared defaults for every skill eval suite under evals/<skill>/.
+#
+# Wired into each suite at run time via:
+#   promptfoo eval -c shared/defaults.yaml -c <skill>/promptfooconfig.yaml
+#
+# promptfoo's combineConfigs deep-merges defaultTest.options, concatenates
+# defaultTest.assert arrays, and dedupes providers, so each suite only needs
+# to declare what's specific to it (description, prompts, providers, tests,
+# and any extra suite-specific assertions).
+description: "shared defaults"
+
+# Empty placeholders so per-config schema validation passes without altering
+# the merged config: combineConfigs concatenates `prompts` and dedupes
+# `providers` across `-c` files, so [] adds nothing.
+prompts: []
+providers: []
+
+defaultTest:
+  options:
+    provider: "{{env.RUBRIC_MODEL}}"
+    transform: file://./transform.js
+  assert:
+    - type: javascript
+      value: file://./output-valid.js
+      weight: 0
+      metric: output_valid
+    # Cost is intentionally NOT asserted here. It varies by an order of
+    # magnitude between single-action skills (aiconfig-create ~$0.05)
+    # and multi-turn orchestrators (onboarding $0.20-$1.50), so a single
+    # global threshold flags either too aggressively or too leniently.
+    # Per-run cost is still surfaced in promptfoo's summary output and
+    # in eval-scores.json; rely on those + trend tracking instead of
+    # making cost an assertion.
+    # 180s accommodates the longest legitimate onboarding run (multi-turn
+    # flows commonly take 60-150s; flag a true regression at 3 min). Fast
+    # single-action skills can override per-suite if a tighter cap matters.
+    - type: latency
+      threshold: 180000

@@ -1,9 +1,9 @@
 {
   "skills": [
     {
-      "name": "example",
-      "description": "This is an example skill.",
-      "path": "skills/example",
+      "name": "onboardingV2",
+      "description": "Onboard a project to LaunchDarkly: kickoff roadmap, resumable log, explore repo, MCP, companion flag skills, nested SDK install (detect/plan/apply), first flag.",
+      "path": "skills/onboardingV2",
       "version": "1.0.0",
       "license": "Apache-2.0",
       "compatibility": "All"
