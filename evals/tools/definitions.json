@@ -498,5 +498,16 @@
       },
       "required": ["projectKey", "flagKey", "environmentKey"]
     }
+  },
+  {
+    "name": "get-project",
+    "description": "Get a project by key. Returns the project's key, name, and environments.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "projectKey": { "type": "string", "description": "The project key" }
+      },
+      "required": ["projectKey"]
+    }
   }
 ]

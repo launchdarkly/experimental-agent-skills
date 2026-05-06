@@ -17,16 +17,16 @@ Scripts invoke the **locally installed** `promptfoo` from `node_modules` (not `n
 ## Running Evals
 
 ```bash
-npm run eval:aiconfig-create         # Run all test cases for aiconfig-create
-npm run eval:aiconfig-create:single  # Run just the first test case (quick check)
-npm run eval:all                     # Run every suite and rebuild ../eval-scores.json
-npm run eval:aggregate               # Rebuild ../eval-scores.json from existing results.json files (no API calls)
-npm run eval:diff                    # List skills whose source has changed since their last recorded score
-npm run eval:badges                  # Sync per-skill README score badges from eval-scores.json
-npm run eval:view                    # Open the results UI at localhost:15500
+npm run eval:onboarding         # Run all test cases for the onboarding skill
+npm run eval:onboarding:single  # Run just the first test case (quick check)
+npm run eval:all                # Run every suite and rebuild ../eval-scores.json
+npm run eval:aggregate          # Rebuild ../eval-scores.json from existing results.json files (no API calls)
+npm run eval:diff               # List skills whose source has changed since their last recorded score
+npm run eval:badges             # Sync per-skill README score badges from eval-scores.json
+npm run eval:view               # Open the results UI at localhost:15500
 ```
 
-`eval:<suite>` and `eval:<suite>:single` exist for every suite registered in `scripts/_manifest.js` (currently `aiconfig-create`, `aiconfig-update`, `aiconfig-tools`, `aiconfig-variations`, `onboarding-router`).
+`eval:<suite>` and `eval:<suite>:single` exist for every suite registered in `scripts/_manifest.js` (currently `onboarding`).
 
 All run scripts pass `--no-cache` so dev iterations always reflect the current SKILL.md and provider.
 
@@ -46,8 +46,8 @@ Each run writes per-(model, suite) results to `<suite>/results.<alias>.json` —
 Subset and ad-hoc model overrides are supported via the dispatcher directly:
 
 ```bash
-node scripts/run-models.js --model=haiku --only=aiconfig-create,aiconfig-tools
-node scripts/run-models.js --model=claude-something-newer-2026 --only=aiconfig-create
+node scripts/run-models.js --model=haiku --only=onboarding
+node scripts/run-models.js --model=claude-something-newer-2026 --only=onboarding
 ```
 
 Model aliases live in `scripts/_models.js`; edit there when newer Anthropic models ship. The rubric grader (`RUBRIC_MODEL`) is independent and stays on a cheap model regardless of which agent you pick.
@@ -82,7 +82,7 @@ evals/
   mocks/
     tool-responses.json      # Canned responses returned when Claude calls a tool
   <skill-name>/
-    promptfooconfig.yaml     # One directory per skill, e.g. aiconfig-create/promptfooconfig.yaml
+    promptfooconfig.yaml     # One directory per skill, e.g. onboarding/promptfooconfig.yaml
 ```
 
 ### Shared defaults (`shared/defaults.yaml`)
@@ -158,7 +158,7 @@ Running `npm run eval:all` invokes every suite and writes a summary file at the 
   "schemaVersion": 1,
   "updatedAt": "2026-04-28T00:00:00Z",
   "skills": {
-    "ai-configs/aiconfig-create": {
+    "onboardingV2": {
       "score": 100,
       "passed": 5,
       "total": 5,
@@ -187,7 +187,7 @@ Read the SKILL.md and note every MCP tool it references (in its "Required MCP to
 mkdir <skill-name>
 ```
 
-Use the same directory name as the skill (e.g., `aiconfig-create`).
+Use the same directory name as the skill (e.g., `onboarding`).
 
 ### Step 3: Write `promptfooconfig.yaml`
 
@@ -262,9 +262,9 @@ Use a mix of deterministic and LLM-judged assertions:
 - type: javascript
   value: |
     const tools = output.tools_called || [];
-    const pass = tools.includes('create-ai-config');
+    const pass = tools.includes('create-flag');
     return { pass, score: pass ? 1 : 0, reason: 'Tools: ' + tools.join(' -> ') };
-  metric: calls_create_ai_config
+  metric: calls_create_flag
   weight: 3
 ```
 
@@ -274,8 +274,8 @@ Use a mix of deterministic and LLM-judged assertions:
 - type: javascript
   value: |
     const tools = output.tools_called || [];
-    const aIdx = tools.indexOf('list-ai-configs');
-    const bIdx = tools.lastIndexOf('create-ai-config');
+    const aIdx = tools.indexOf('list-flags');
+    const bIdx = tools.lastIndexOf('create-flag');
     const pass = aIdx >= 0 && bIdx > aIdx;
     return { pass, score: pass ? 1 : 0, reason: 'list@' + aIdx + ' create@' + bIdx };
   metric: explores_before_creating
@@ -287,13 +287,13 @@ Use a mix of deterministic and LLM-judged assertions:
 ```yaml
 - type: javascript
   value: |
-    const call = (output.trajectory || []).find(t => t.tool === 'create-ai-config');
-    if (!call) return { pass: false, score: 0, reason: 'No create-ai-config call' };
+    const call = (output.trajectory || []).find(t => t.tool === 'create-flag');
+    if (!call) return { pass: false, score: 0, reason: 'No create-flag call' };
     const a = call.arguments;
-    const isAgent = a.mode === 'agent';
+    const hasKey = typeof a.key === 'string' && a.key.length > 0;
     const hasName = typeof a.name === 'string' && a.name.length > 0;
-    const score = (isAgent ? 0.5 : 0) + (hasName ? 0.5 : 0);
-    return { pass: score >= 0.5, score, reason: 'mode=' + (a.mode || '?') + ' name=' + (a.name || '?') };
+    const score = (hasKey ? 0.5 : 0) + (hasName ? 0.5 : 0);
+    return { pass: score >= 0.5, score, reason: 'key=' + (a.key || '?') + ' name=' + (a.name || '?') };
   metric: create_args_correct
   weight: 3
 ```
@@ -304,7 +304,7 @@ Use a mix of deterministic and LLM-judged assertions:
 - type: javascript
   value: |
     const tools = output.tools_called || [];
-    const forbidden = ['delete-ai-config'];
+    const forbidden = ['delete-flag'];
     const called = forbidden.filter(f => tools.includes(f));
     const pass = called.length === 0;
     return { pass, score: pass ? 1 : 0, reason: pass ? 'No forbidden tools' : 'Called: ' + called.join(', ') };

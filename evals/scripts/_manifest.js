@@ -16,36 +16,6 @@
  */
 const SUITES = [
   {
-    suite: "aiconfig-create",
-    skillKey: "ai-configs/aiconfig-create",
-    skillDir: "skills/ai-configs/aiconfig-create",
-    readme: "skills/ai-configs/aiconfig-create/README.md",
-  },
-  {
-    suite: "aiconfig-update",
-    skillKey: "ai-configs/aiconfig-update",
-    skillDir: "skills/ai-configs/aiconfig-update",
-    readme: "skills/ai-configs/aiconfig-update/README.md",
-  },
-  {
-    suite: "aiconfig-tools",
-    skillKey: "ai-configs/aiconfig-tools",
-    skillDir: "skills/ai-configs/aiconfig-tools",
-    readme: "skills/ai-configs/aiconfig-tools/README.md",
-  },
-  {
-    suite: "aiconfig-variations",
-    skillKey: "ai-configs/aiconfig-variations",
-    skillDir: "skills/ai-configs/aiconfig-variations",
-    readme: "skills/ai-configs/aiconfig-variations/README.md",
-  },
-  {
-    suite: "onboarding-router",
-    skillKey: "onboarding-router",
-    skillDir: "skills/onboarding-router",
-    readme: "skills/onboarding-router/README.md",
-  },
-  {
     suite: "onboarding",
     skillKey: "onboardingV2",
     skillDir: "skills/onboardingV2",
