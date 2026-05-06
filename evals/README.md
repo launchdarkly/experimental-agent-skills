@@ -2,28 +2,28 @@
 
 Automated evaluations for LaunchDarkly agent skills using [promptfoo](https://promptfoo.dev).
 
-Each skill gets a set of test cases that verify an agent follows the skill's workflow correctly when given realistic user requests. The evals run Claude through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) so SKILL.md is loaded the way a real Claude Code session loads it (off disk, via `.claude/skills/<slug>/`), present it with mocked LaunchDarkly MCP tools, and assert on both the tool-call trajectory and response quality.
+Each skill gets a set of test cases that verify an agent follows the skill's workflow correctly when given realistic user requests. The evals run Claude through the [Claude Agent SDK](https://www.pnpmjs.com/package/@anthropic-ai/claude-agent-sdk) so SKILL.md is loaded the way a real Claude Code session loads it (off disk, via `.claude/skills/<slug>/`), present it with mocked LaunchDarkly MCP tools, and assert on both the tool-call trajectory and response quality.
 
 ## Setup
 
 ```bash
 cd evals
-npm install
+pnpm install
 cp .env.example .env  # then fill in ANTHROPIC_API_KEY (and optionally AGENT_MODEL / RUBRIC_MODEL)
 ```
 
-Scripts invoke the **locally installed** `promptfoo` from `node_modules` (not `npx promptfoo@latest`) so a supported Node range matches the package you install. If `npx promptfoo@latest` complains about Node version, use `npm run` from this directory after `npm install`.
+Scripts invoke the **locally installed** `promptfoo` from `node_modules` (not `npx promptfoo@latest`) so a supported Node range matches the package you install. If `npx promptfoo@latest` complains about Node version, use `pnpm run` from this directory after `pnpm install`.
 
 ## Running Evals
 
 ```bash
-npm run eval:onboarding         # Run all test cases for the onboarding skill
-npm run eval:onboarding:single  # Run just the first test case (quick check)
-npm run eval:all                # Run every suite and rebuild ../eval-scores.json
-npm run eval:aggregate          # Rebuild ../eval-scores.json from existing results.json files (no API calls)
-npm run eval:diff               # List skills whose source has changed since their last recorded score
-npm run eval:badges             # Sync per-skill README score badges from eval-scores.json
-npm run eval:view               # Open the results UI at localhost:15500
+pnpm run eval:onboarding         # Run all test cases for the onboarding skill
+pnpm run eval:onboarding:single  # Run just the first test case (quick check)
+pnpm run eval:all                # Run every suite and rebuild ../eval-scores.json
+pnpm run eval:aggregate          # Rebuild ../eval-scores.json from existing results.json files (no API calls)
+pnpm run eval:diff               # List skills whose source has changed since their last recorded score
+pnpm run eval:badges             # Sync per-skill README score badges from eval-scores.json
+pnpm run eval:view               # Open the results UI at localhost:15500
 ```
 
 `eval:<suite>` and `eval:<suite>:single` exist for every suite registered in `scripts/_manifest.js` (currently `onboarding`).
@@ -35,13 +35,13 @@ All run scripts pass `--no-cache` so dev iterations always reflect the current S
 To answer "does my skill still pass on a different agent model?" without juggling `.env` edits:
 
 ```bash
-npm run eval:haiku         # All suites, agent = Haiku 4.5  (cheapest, weakest reasoning)
-npm run eval:sonnet        # All suites, agent = Sonnet 4   (canonical baseline)
-npm run eval:opus          # All suites, agent = Opus 4     (strongest, most expensive)
-npm run eval:matrix        # All suites × all 3 models, prints a comparison table
+pnpm run eval:haiku         # All suites, agent = Haiku 4.5  (cheapest, weakest reasoning)
+pnpm run eval:sonnet        # All suites, agent = Sonnet 4   (canonical baseline)
+pnpm run eval:opus          # All suites, agent = Opus 4     (strongest, most expensive)
+pnpm run eval:matrix        # All suites × all 3 models, prints a comparison table
 ```
 
-Each run writes per-(model, suite) results to `<suite>/results.<alias>.json` — the canonical `<suite>/results.json` and `../eval-scores.json` produced by `eval:all` are **not** touched, so PR-blocking thresholds remain anchored to Sonnet 4. To promote a particular model run into the canonical scores, copy `<suite>/results.<alias>.json` over `<suite>/results.json` and run `npm run eval:aggregate`.
+Each run writes per-(model, suite) results to `<suite>/results.<alias>.json` — the canonical `<suite>/results.json` and `../eval-scores.json` produced by `eval:all` are **not** touched, so PR-blocking thresholds remain anchored to Sonnet 4. To promote a particular model run into the canonical scores, copy `<suite>/results.<alias>.json` over `<suite>/results.json` and run `pnpm run eval:aggregate`.
 
 Subset and ad-hoc model overrides are supported via the dispatcher directly:
 
@@ -75,7 +75,7 @@ evals/
     aggregate.js             # runs every suite (or just changed ones) and writes ../eval-scores.json
     diff-changed-skills.js   # git-log diff to compute which suites need re-running
     render-badges.js         # writes the eval-score block in each skill's README
-    _smoke-sdk.js            # local smoke runner / SDK init dump (developer aid, not in npm scripts)
+    _smoke-sdk.js            # local smoke runner / SDK init dump (developer aid, not in pnpm scripts)
     _diag-isolation.js       # local diagnostic for skill-discovery isolation (developer aid)
   tools/
     definitions.json         # Anthropic-format tool definitions for all LD MCP tools
@@ -151,7 +151,7 @@ Rationale: agents commonly call `get-foo` once before mutating and once after to
 
 ## Aggregated quality artifact (`eval-scores.json`)
 
-Running `npm run eval:all` invokes every suite and writes a summary file at the repo root (`../eval-scores.json` from this directory). Schema:
+Running `pnpm run eval:all` invokes every suite and writes a summary file at the repo root (`../eval-scores.json` from this directory). Schema:
 
 ```json
 {
@@ -173,7 +173,7 @@ Running `npm run eval:all` invokes every suite and writes a summary file at the 
 
 The CI workflow at `.github/workflows/eval-skills.yml` keeps this file fresh by re-running only the suites whose source has changed since the last recorded `lastCommit`, computed by `scripts/diff-changed-skills.js`.
 
-`npm run eval:badges` synchronises a small `<!-- eval-score:start --> ... <!-- eval-score:end -->` block in each skill's README from `eval-scores.json` so the score is visible before installation. Manual edits outside that block are preserved.
+`pnpm run eval:badges` synchronises a small `<!-- eval-score:start --> ... <!-- eval-score:end -->` block in each skill's README from `eval-scores.json` so the score is visible before installation. Manual edits outside that block are preserved.
 
 ## Adding Evals for a New Skill
 
@@ -228,7 +228,7 @@ tests:
 | `expose_mcp_tools` | `true` | When `false`, do not expose any LaunchDarkly mock MCP tools to the agent. Use for routing skills, advisory skills, and others that produce text-only output and should not call LD tools. The harness system prompt is also adjusted so the agent isn't nudged toward tool use. |
 | `force_skill_invocation` | `false` | When `true`, set the agent's `initialPrompt` to `/<skill_slug>` so the SDK's slash-command parser invokes the skill explicitly and the SKILL.md body is loaded into the agent's context. Use for skills whose description-based auto-activation is unreliable — typically routing or advisory skills where the agent would otherwise answer the user's question from base knowledge without ever reading the SKILL.md body. In production, the orchestrator (or the user typing `/<slug>`) plays the equivalent role. |
 
-Add a matching pair of npm scripts in `package.json` (`eval:<skill>` and `eval:<skill>:single`) so the suite picks up the shared defaults via `-c shared/defaults.yaml`.
+Add a matching pair of pnpm scripts in `package.json` (`eval:<skill>` and `eval:<skill>:single`) so the suite picks up the shared defaults via `-c shared/defaults.yaml`.
 
 ### Step 4: Write test cases
 
@@ -381,7 +381,7 @@ Important: make sure mock data for `list-*` tools does not contain items that ma
 - One `promptfooconfig.yaml` per skill, in its own directory under `evals/`.
 - 3-5 test cases per skill.
 - Every JavaScript assertion returns `{ pass, score, reason }`.
-- `shared/defaults.yaml` is always merged in via the npm scripts; assertions assume `output` is already a parsed object.
+- `shared/defaults.yaml` is always merged in via the pnpm scripts; assertions assume `output` is already a parsed object.
 - Trajectory ordering uses FIRST occurrence of the prerequisite and LAST occurrence of the verifier (see "Trajectory ordering convention" above).
 - Prefer deterministic JavaScript assertions for tool trajectory checks. Use `llm-rubric` only for semantic quality that cannot be checked programmatically.
 - Keep `llm-rubric` criteria derived directly from the skill's workflow steps -- if the skill says "do X before Y," the rubric should check for it.
