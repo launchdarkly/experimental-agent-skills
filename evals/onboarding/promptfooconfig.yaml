@@ -728,6 +728,13 @@ tests:
   #     toggling the flag on
   #   - then toggle the flag on
   # No targeting rules at this step -- it's a proof-of-life demo.
+  #
+  # Uses `full` provider (allow_builtins: true) so Write/Edit tool calls
+  # are recorded in the trajectory and the assertion that checks the agent
+  # avoids hardcoding SDK keys can inspect the written code.
+  #
+  # `mock_files` scaffolds the existing codebase so the agent's Read/Glob
+  # calls return real content immediately instead of hitting an empty dir.
   # ------------------------------------------------------------------
   - description: "First flag (Step 4): creates kebab-case boolean flag, gates toggle behind off_state_confirmed ask-question, no premature targeting"
     providers: [full]
@@ -745,7 +752,38 @@ tests:
         For demo purposes, we want a boolean flag wrapping a small
         feature in src/server.js. Suggested key direction: something
         like `show-greeting` or similar -- you choose a sensible name.
-      max_turns: 10
+      # 15 turns: agent reads 4-6 mock files before substantive work;
+      # 10 was too tight for the full create->ask->write->toggle sequence.
+      max_turns: 15
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": {
+              "express": "^4.18.0",
+              "@launchdarkly/node-server-sdk": "^9.0.0"
+            }
+          }
+        "src/launchdarkly.js": |
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          ldClient.waitForInitialization();
+          module.exports = ldClient;
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+        ".env.example": |
+          LAUNCHDARKLY_SDK_KEY=sdk-your-key-here
+      # The off_state_confirmed ask-question must be answered for the agent
+      # to proceed to the toggle step. Without this, the flow stalls after
+      # create-flag and calls_toggle_to_verify / asks_off_state_before_toggle
+      # can never pass.
+      mock_ask_question_answers:
+        - ["confirmed"]
     assert:
       - type: javascript
         value: |
@@ -943,17 +981,20 @@ tests:
   #
   # The codebase_context names a concrete entrypoint (src/server.js
   # with a /hello endpoint) so the agent wires the flag into the
-  # existing app rather than scaffolding a new demo. Scaffolding
-  # triggers `npm start` on the generated project, which hangs the
-  # harness -- Bash calls block until the spawned process exits, and
-  # a real dev server never does. Matches Test 5's strategy.
+  # existing app rather than scaffolding a new demo.
+  #
+  # Uses `lean` provider (allow_builtins: false) because this test
+  # only measures narrative quality (progress recaps, completion
+  # language). No assertions check for Write/Edit tool calls, so
+  # builtins are not needed. Using lean eliminates real npm/npx
+  # network calls that would otherwise fire during SDK install.
   #
   # The test isolates narrative quality as its own signal: regressions
   # show up here as a single red test instead of being diluted across
   # the weighted scores of Tests 3/4/5.
   # ------------------------------------------------------------------
   - description: "Narrative quality: full-mode arc narrates plan upfront, states progress along the way, names value at completion, and signals done"
-    providers: [full]
+    providers: [lean]
     vars:
       user_request: >
         Onboard me to LaunchDarkly. Project key is "web-app".
@@ -1100,6 +1141,13 @@ tests:
   # with the SDK package installed but no credentials wired. Per the
   # SKILL.md the agent MUST call ask-question with sdk_key_setup
   # before writing any keys to disk or fetching them via MCP.
+  #
+  # Uses `full` provider so Write/Edit tool calls are recorded in the
+  # trajectory. The `no_premature_key_write` assertion checks that no
+  # Write to .env happens before the sdk_key_setup ask-question call.
+  #
+  # `mock_files` scaffolds package.json so the agent sees the expected
+  # project state without scanning an empty fixture directory.
   # ------------------------------------------------------------------
   - description: "SDK key gate: asks sdk_key_setup before writing credentials, does not silently fetch or hardcode keys"
     providers: [full]
@@ -1114,6 +1162,19 @@ tests:
         The agent should install the SDK package and then ask how the
         user wants credentials handled before writing any key values.
       max_turns: 8
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": { "express": "^4.18.0" }
+          }
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
       mock_ask_question_answers:
         - ["auto"]
         - ["agent_fetch"]
@@ -1166,6 +1227,11 @@ tests:
   # must create LAUNCHDARKLY_ONBOARDING.md (Step 0) before doing
   # substantive work. We check for a Write tool call targeting that
   # file name.
+  #
+  # Uses `full` provider so Write tool calls appear in the trajectory.
+  # `mock_files` scaffolds just the package.json so the agent can
+  # confirm the project exists; no LAUNCHDARKLY_ONBOARDING.md is
+  # scaffolded (that's the file the test expects the agent to CREATE).
   # ------------------------------------------------------------------
   - description: "Onboarding log: creates LAUNCHDARKLY_ONBOARDING.md early in the run"
     providers: [full]
@@ -1178,6 +1244,14 @@ tests:
         LaunchDarkly integration. No LAUNCHDARKLY_ONBOARDING.md
         exists yet. The repo uses npm.
       max_turns: 5
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": { "express": "^4.18.0" }
+          }
     assert:
       - type: javascript
         value: |
@@ -1307,6 +1381,11 @@ tests:
   # first flag, the agent must write flag-gated code into the app
   # (the "aha" moment). We check for a Write/Edit tool call targeting
   # a source file (not .env, not .md).
+  #
+  # Uses `full` provider so Write/Edit calls appear in the trajectory.
+  # `mock_files` provides the actual source files so the agent can
+  # Read src/server.js and Edit it in-place rather than creating a
+  # file from scratch against an empty fixture directory.
   # ------------------------------------------------------------------
   - description: "Aha moment: writes flag-gated code into the app source during first flag creation"
     providers: [full]
@@ -1328,6 +1407,29 @@ tests:
         Add the flag-gated element to the existing /hello endpoint
         in src/server.js.
       max_turns: 10
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": {
+              "express": "^4.18.0",
+              "@launchdarkly/node-server-sdk": "^9.0.0"
+            }
+          }
+        "src/launchdarkly.js": |
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          ldClient.waitForInitialization();
+          module.exports = ldClient;
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+        ".env.example": |
+          LAUNCHDARKLY_SDK_KEY=sdk-your-key-here
       mock_ask_question_answers:
         - ["confirmed"]
     assert:
