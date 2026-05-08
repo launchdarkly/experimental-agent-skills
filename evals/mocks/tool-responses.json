@@ -119,6 +119,50 @@
     "previous": { "on": false },
     "current": { "on": true }
   },
+  "get-environments": {
+    "items": [
+      {
+        "key": "test",
+        "name": "Test",
+        "color": "417505",
+        "apiKey": "sdk-test-abcdef12-3456-7890-abcd-ef1234567890",
+        "mobileKey": "mob-test-abcdef12-3456-7890-abcd-ef1234567890",
+        "_id": "clientside-test-abcdef12"
+      },
+      {
+        "key": "production",
+        "name": "Production",
+        "color": "D43F3A",
+        "apiKey": "sdk-prod-abcdef12-3456-7890-abcd-ef1234567890",
+        "mobileKey": "mob-prod-abcdef12-3456-7890-abcd-ef1234567890",
+        "_id": "clientside-prod-abcdef12"
+      }
+    ],
+    "totalCount": 2
+  },
+  "get-project": {
+    "key": "{{projectKey}}",
+    "name": "{{projectKey}}",
+    "environments": {
+      "items": [
+        {
+          "key": "test",
+          "name": "Test",
+          "color": "417505"
+        },
+        {
+          "key": "production",
+          "name": "Production",
+          "color": "D43F3A"
+        }
+      ],
+      "totalCount": 2
+    }
+  },
+  "list-feature-flags": {
+    "items": [],
+    "totalCount": 0
+  },
   "list-ai-configs": {
     "configs": [
       {

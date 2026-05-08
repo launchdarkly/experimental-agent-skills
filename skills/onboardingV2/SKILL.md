@@ -93,19 +93,22 @@ Both modes enforce the same outcomes: MCP connected, SDK installed, first flag e
 
 ## Resume After Restart
 
-If the user says "continue onboarding" — a restart just happened after MCP configuration. Do not ask what was happening. Re-detect state silently and resume from the right step.
+If the user says "continue onboarding" — a restart just happened. Do not ask what was happening. Check for `LAUNCHDARKLY_ONBOARDING.md` first, then fall back to live detection.
 
-**Re-survey in order:**
-1. **MCP** — tell the user before probing: "I'll check if MCP is still connected." Then attempt a LaunchDarkly MCP tool call (e.g., list environments or projects). When the call succeeds, immediately say so out loud in a user-facing line — for example "MCP is connected." or "MCP is live — moving on." Do not silently proceed; the user needs to see that the probe succeeded. Failure = MCP setup incomplete.
-2. **SDK** — scan dependency files for a LaunchDarkly SDK package. Check for initialization code in the codebase. When found, name the package and the init file in one line ("SDK is installed — `@launchdarkly/node-server-sdk` initialized in `src/launchdarkly.js`.") so the recap below has something to point at.
-3. **Flag** — check for `variation()` or equivalent flag evaluation calls in the codebase. When the search returns nothing, say so explicitly ("No flags evaluating yet — that's the next step.") rather than skipping silently.
+**Resume sequence:**
 
-**Resume rules (first incomplete step wins):**
-- MCP probe failed for any reason (401, error, timeout) → hand off to `mcp-configure` to resolve it. Do not attempt to fix auth here — that is mcp-configure's job.
-- MCP failed or absent (non-auth error) → resume at Step 2. State: "MCP didn't connect. Let's sort that out."
-- MCP live, SDK missing → resume at Step 3. State: "MCP is live. Next: getting the SDK installed."
-- MCP live, SDK present, no flag → resume at Step 4. State: "You're connected and the SDK is installed. Creating your first flag now."
-- All complete → summarize what's in place and offer the next-step options from Step 4.
+1. **Check the onboarding log.** Look for `LAUNCHDARKLY_ONBOARDING.md` at the repo root (or `docs/LAUNCHDARKLY_ONBOARDING.md`). If it exists, read it — the **Next step** field tells you where to resume. Align with the log's checklist and skip anything marked `done`.
+
+2. **If no log exists, re-survey live state in order:**
+   - **MCP** — attempt a LaunchDarkly MCP tool call (e.g., `get-environments` or `list-feature-flags`). When it succeeds, state the result out loud ("MCP is connected."). Failure = MCP setup incomplete.
+   - **SDK** — scan dependency files for a LaunchDarkly SDK package. Check for initialization code. When found, name the package and the init file in one line.
+   - **Flag** — check for `variation()` or equivalent flag evaluation calls. When the search returns nothing, say so explicitly.
+
+3. **Resume rules (first incomplete step wins):**
+   - MCP probe failed for any reason → hand off to `mcp-configure` to resolve it.
+   - MCP live, SDK missing → resume at Step 3. State: "MCP is live. Next: getting the SDK installed."
+   - MCP live, SDK present, no flag → resume at Step 4. State: "You're connected and the SDK is installed. Creating your first flag now."
+   - All complete → summarize what's in place and offer next-step options from Step 4.
 
 Deliver the resume state in one sentence, followed by a progress recap showing everything confirmed complete so far. Then continue without preamble.
 
@@ -130,25 +133,27 @@ When the user asks to set up LaunchDarkly, before doing anything else:
 
    In fast mode (experienced signals detected): skip this orientation entirely and go straight to the `AskQuestion` form.
 
-3. Use the `AskQuestion` tool to collect account status before proceeding. Do not scan files, run commands, or install anything until the user responds.
+3. Do NOT ask whether the user has a LaunchDarkly account upfront. Account status is inferred later:
+   - **Step 2 (MCP):** If the user completes MCP OAuth successfully, they have an account — confirmed, no question needed.
+   - **Step 3 (SDK keys):** If the user cannot provide keys (no account), surface the signup link at the D7 decision point: `https://app.launchdarkly.com/signup?source=agent`.
 
-**AskQuestion form — account status:**
-```json
-{
-  "questions": [
-    {
-      "id": "account_status",
-      "prompt": "Do you already have a LaunchDarkly account?",
-      "options": [
-        { "id": "yes", "label": "Yes, I'm ready to go" },
-        { "id": "no", "label": "No, I need to sign up first" }
-      ]
-    }
-  ]
-}
-```
+---
 
-If `account_status` is `no`: share `https://app.launchdarkly.com/signup?source=agent` and continue with exploration only until they have access.
+## Step 0: Onboarding Log
+
+Create or refresh `LAUNCHDARKLY_ONBOARDING.md` silently at the repo root (or `docs/LAUNCHDARKLY_ONBOARDING.md` if a `docs/` folder exists and the root file is absent). Do not ask for permission — this is a working log, not a deliverable.
+
+**What to write (update after each stage completes or when something important changes):**
+- **Checklist:** Each stage with status (`not started` / `in progress` / `done` / `skipped` + brief reason).
+- **Context:** coding agent id, language/framework summary, monorepo target path if any, LaunchDarkly **project key** and **environment key** when known (never paste secrets or full SDK keys — say "stored in env" or "user provided offline").
+- **MCP:** configured yes/no, hosted vs fallback.
+- **Commands run:** e.g. `npx skills add ...` (no secrets).
+- **Blockers / errors:** what failed and what was tried.
+- **Next step:** single explicit step name (e.g. "Create first feature flag").
+
+**Resuming:** If `LAUNCHDARKLY_ONBOARDING.md` already exists, read it first. Align with the stated **Next step** and only redo work the log marks incomplete or invalid. Show a shorter "where we are" summary instead of the full kickoff.
+
+This file is a **working** log during onboarding. After success, it is deleted and replaced with a permanent `LAUNCHDARKLY.md` summary.
 
 ---
 
@@ -344,12 +349,40 @@ Key rules to enforce:
 - Client is a singleton. One instance, shared across the app.
 - Wait for initialization before evaluating flags.
 
-**Before asking the user to provide any key or ID** — regardless of whether they said they'd paste it or have you write it — always give them the direct link first:
+### SDK key setup — BLOCKING decision point
 
-> "You can find your Client-side ID here: `https://app.launchdarkly.com/projects/{projectKey}/settings/environments/{envKey}/keys`
+After installing the SDK package, the user needs their SDK key (or client-side ID / mobile key) configured. Use the `AskQuestion` tool:
+
+```json
+{
+  "questions": [
+    {
+      "id": "sdk_key_setup",
+      "prompt": "The SDK needs credentials for your environment. How would you like to set them up?",
+      "options": [
+        { "id": "agent_fetch", "label": "Fetch it for me via MCP" },
+        { "id": "paste", "label": "I'll paste it — tell me the variable name" },
+        { "id": "self", "label": "I'll handle it myself — just tell me what I need" },
+        { "id": "no_account", "label": "I don't have a LaunchDarkly account yet" }
+      ]
+    }
+  ]
+}
+```
+
+**STOP. Do not write keys, fetch keys, or continue until the user responds.**
+
+- If `agent_fetch`: use `get-environments` via MCP to retrieve the key for the target environment. Write it to `.env` (ensure `.env` is in `.gitignore`). Never echo full key values in chat.
+- If `paste`: tell the user the variable name they need and give them the direct link (see below). Wait for them to confirm the key is set.
+- If `self`: output the exact variable name and direct link. State: "Let me know when it's in place."
+- If `no_account`: share `https://app.launchdarkly.com/signup?source=agent`. Write placeholder variable names to `.env` so the code compiles. Continue with initialization — the app will fail to connect until real keys are set, which is expected.
+
+**When providing the direct link** — substitute the known `projectKey` and `envKey`:
+
+> "You can find your SDK key here: `https://app.launchdarkly.com/projects/{projectKey}/settings/environments/{envKey}/keys`
 > That link opens a modal with all your keys — no extra clicks needed."
 
-Substitute the known `projectKey` and `envKey`. Do **not** tell the user to click an ellipsis or navigate through menus — the direct link opens the keys modal automatically. If MCP already returned the key value, skip this — no need to send the user anywhere.
+Do **not** tell the user to click an ellipsis or navigate through menus — the direct link opens the keys modal automatically. If MCP already returned the key value via `agent_fetch`, skip this — no need to send the user anywhere.
 
 On success: "The SDK is installed. Your codebase can evaluate flags."
 

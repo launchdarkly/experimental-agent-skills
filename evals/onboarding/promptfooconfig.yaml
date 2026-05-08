@@ -7,7 +7,7 @@
 # Kickoff phase, four numbered stages (Explore -> Connect (MCP) ->
 # Install (SDK) -> Ship (first flag)), and hands off to nested skills
 # (mcp-configure, sdk-install) at the appropriate stage. Decision
-# points are inline `AskQuestion` forms (account_status at kickoff,
+# points are inline `AskQuestion` forms (mcp_decision at Step 2,
 # app_location for unclear workspaces, mcp_decision before MCP setup,
 # sdk_install_mode before SDK install, off_state_confirmed before
 # the first toggle). A full E2E run takes 50+ turns and requires
@@ -43,10 +43,17 @@ prompts:
 
 providers:
   - id: file://../providers/claude-skill-agent-sdk.js
-    label: claude-skill-agent-sdk
+    label: full
     config:
       skill_slug: onboardingV2
       allow_builtins: true
+      expose_mcp_tools: true
+      expose_ask_question: true
+  - id: file://../providers/claude-skill-agent-sdk.js
+    label: lean
+    config:
+      skill_slug: onboardingV2
+      allow_builtins: false
       expose_mcp_tools: true
       expose_ask_question: true
 
@@ -58,7 +65,7 @@ tests:
   #   - open with a one-sentence welcome + payoff (flip a switch, no
   #     redeploy)
   #   - show the four-row roadmap table (Scan / SDK / first flag / MCP)
-  #   - call `ask-question` with the account_status form
+  #   - NOT ask about account status (inferred from MCP OAuth)
   #   - NOT ask for any SDK key / token / client-side ID up front
   #   - NOT leak internal labels (Step N -- label, skill file paths,
   #     workflow language like "BLOCKING" / "hand off" / "proceed to
@@ -72,7 +79,8 @@ tests:
   # before the ask-question call. The full kickoff arc is what the
   # user actually reads before the agent does anything observable.
   # ------------------------------------------------------------------
-  - description: "Kickoff: full kickoff arc has welcome + roadmap + account_status question, no premature credential asks, no leaked internal labels"
+  - description: "Kickoff: full kickoff arc has welcome + roadmap, no upfront account question, no premature credential asks, no leaked internal labels"
+    providers: [lean]
     vars:
       user_request: >
         Onboard me to LaunchDarkly. The project key is "web-app".
@@ -82,11 +90,11 @@ tests:
         utility deps. There is no existing LaunchDarkly integration --
         no @launchdarkly/* in dependencies, no LDClient.init calls
         anywhere. The repo uses standard `npm` as its package manager.
-      # Kickoff-only assertions: we score `first_assistant_text` and
-      # the FIRST `ask-question` call (account_status). Both happen by
-      # turn 1-2. Capping at 5 turns keeps the test cheap (~$0.20-0.50)
-      # and prevents the agent from racing through Steps 1-4 just to
-      # be evaluated on its opening reply.
+      # Kickoff-only assertions: we score the welcome, roadmap, and
+      # verify the agent does NOT ask about account status. Capping
+      # at 5 turns keeps the test cheap (~$0.20-0.50) and prevents
+      # the agent from racing through all steps just to be evaluated
+      # on its opening reply.
       max_turns: 5
     assert:
       - type: javascript
@@ -118,35 +126,23 @@ tests:
 
       - type: javascript
         value: |
-          // The new skill REQUIRES the agent to call ask-question with
-          // an account_status form before doing anything else. We check
-          // for an ask-question call whose `id` or option labels reflect
-          // the account-status decision (yes/no around having an
-          // account / signing up).
+          // The skill says account status is INFERRED, not asked upfront.
+          // MCP OAuth confirms the account; signup surfaces at D7 (SDK key
+          // step) if needed. An ask-question call about accounts during
+          // kickoff is now a regression.
           const traj = output.trajectory || [];
           const calls = traj.filter((t) => t.tool === 'ask-question');
-          if (calls.length === 0) {
-            return { pass: false, score: 0, reason: 'ask-question was never called -- agent skipped the kickoff account_status form' };
-          }
           const accountCall = calls.find((c) => {
             const args = c.arguments || {};
             const idLike = String(args.id || '').toLowerCase();
             if (idLike.includes('account')) return true;
             const prompt = String(args.prompt || '').toLowerCase();
             if (/\baccount\b/.test(prompt) && /(do you|already|have)/.test(prompt)) return true;
-            const opts = Array.isArray(args.options) ? args.options : [];
-            const optText = opts.map((o) => String(((o && o.id) || '') + '|' + ((o && o.label) || '')).toLowerCase()).join(' ');
-            return /\b(sign\s*up|i need to sign|ready to go|i have an account)\b/.test(optText);
+            return false;
           });
-          if (!accountCall) {
-            const summary = calls.map((c) => String((c.arguments && (c.arguments.id || c.arguments.prompt)) || '')).slice(0, 3).join(' | ');
-            return { pass: false, score: 0, reason: 'ask-question called but not for account_status: ' + summary.slice(0, 200) };
-          }
-          // Strong signal: it should land at or near the start of the
-          // run. We don't fail on position, just note it in the reason.
-          const turn = accountCall.turn || 0;
-          return { pass: true, score: 1, reason: 'account_status form asked at turn ' + turn };
-        metric: asks_account_status
+          const pass = !accountCall;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No upfront account_status question (correct)' : 'Asked about account status at kickoff -- should be inferred' };
+        metric: no_account_status_question
         weight: 3
 
       - type: javascript
@@ -244,11 +240,10 @@ tests:
               Create your first feature flag / MCP recommended), either as
               a markdown table or as a clear four-item enumeration covering
               the same arc.
-          (c) Use the agent's structured question tool to ask whether the
-              user already has a LaunchDarkly account (this is the
-              `ask-question` call -- the rubric should treat it as fulfilled
-              when the kickoff arc previews / sets up that question, since
-              the call itself is checked deterministically).
+          (c) NOT ask about account status -- the skill infers accounts
+              from MCP OAuth and surfaces signup at the SDK key step.
+              The kickoff should proceed directly to exploration after the
+              roadmap.
           (d) Sound like the "Reliable Maverick" voice: practitioner-to-
               practitioner, short sentences, active verbs, no glossary
               definitions, no numbered "Step N" labels in chat, no
@@ -259,14 +254,14 @@ tests:
              no redeploy)?
           2. Did it convey the four-stage roadmap (scan / SDK / first flag /
              MCP) without numbered "Step N" labels?
-          3. Did it set up an account-status question (or call the question
-             tool) before doing any setup work, and avoid asking for
-             credentials (SDK keys, client-side IDs, API tokens) up front?
+          3. Did it avoid asking about account status or credentials (SDK
+             keys, client-side IDs, API tokens) up front? Account status
+             should be inferred, not asked.
           4. Did it sound conversational and direct -- short, active,
              practitioner-to-practitioner -- rather than a copy-pasted
              workflow? A brief generic preamble like "I'll help you onboard"
-             is acceptable as long as the skill-driven welcome+roadmap+
-             question follows in the same kickoff arc.
+             is acceptable as long as the skill-driven welcome+roadmap
+             follows in the same kickoff arc.
 
           Score 1.0 if all four are met. Deduct 0.25 per missed criterion.
           If `kickoff_text` is empty, score 0 (the agent never spoke to the
@@ -283,6 +278,7 @@ tests:
   # root.
   # ------------------------------------------------------------------
   - description: "Monorepo: stops to ask which package to integrate using the app_location form, does not silently pick one"
+    providers: [lean]
     vars:
       user_request: >
         Add LaunchDarkly to this monorepo. The project key is "platform".
@@ -293,7 +289,7 @@ tests:
           - packages/web: Next.js React frontend (browser + server).
           - packages/shared: utility library, not directly runnable.
         No existing LaunchDarkly integration in any package.
-      max_turns: 15
+      max_turns: 8
     assert:
       - type: javascript
         value: |
@@ -306,7 +302,7 @@ tests:
       - type: javascript
         value: |
           // The agent will likely call ask-question more than once
-          // (account_status at kickoff, then app_location for the
+          // (mcp_decision, sdk_install_mode, then app_location for the
           // workspace). We look at every ask-question call and want
           // at least one to surface the candidate package paths.
           const calls = (output.trajectory || []).filter((t) => t.tool === 'ask-question');
@@ -378,6 +374,7 @@ tests:
   # Step 4 (first flag) without re-running install commands.
   # ------------------------------------------------------------------
   - description: "Skips Step 3 (SDK install) when SDK is already installed and initialized, hands off to first flag"
+    providers: [lean]
     vars:
       user_request: >
         Set up LaunchDarkly in this project. Project key is "web-app".
@@ -393,7 +390,7 @@ tests:
 
         The client is imported and used in src/server.js. There is no
         existing flag yet. MCP is already configured.
-      max_turns: 25
+      max_turns: 8
     assert:
       - type: javascript
         value: |
@@ -526,22 +523,16 @@ tests:
   # ------------------------------------------------------------------
   # Test 4: Resume after restart. Per the SKILL.md "Resume After
   # Restart" section, when the user says "continue onboarding" the
-  # agent must NOT re-narrate the kickoff. Instead it re-surveys
-  # state in order: probe MCP via a LD MCP tool call, then scan
-  # dependencies for the SDK, then check for flag-evaluation calls.
-  # First incomplete step wins.
+  # agent checks LAUNCHDARKLY_ONBOARDING.md first, then falls back
+  # to live state detection. It must NOT re-narrate the kickoff.
   #
-  # In this scenario MCP is configured (the probe call will succeed
-  # against the mocks), the SDK is installed and initialized, and no
-  # flags exist yet. Per the Resume rules table, the agent should
-  # land at "MCP live, SDK present, no flag -> resume at Step 4
-  # (Ship)" -- i.e. proceed straight to creating the first flag.
-  #
-  # The skill explicitly does NOT use a log file (no
-  # LAUNCHDARKLY_ONBOARDING.md). Resume detection is entirely from
-  # live state.
+  # In this scenario the onboarding log shows MCP done, SDK done,
+  # next step is first flag. MCP is configured (probe will succeed
+  # against mocks), SDK is installed and initialized, no flags yet.
+  # The agent should land at "first flag" and proceed.
   # ------------------------------------------------------------------
-  - description: "Resume from live state: re-surveys silently, lands on Step 4 (first flag), does not restart kickoff"
+  - description: "Resume: reads onboarding log or re-surveys, lands on first flag, does not restart kickoff"
+    providers: [lean]
     vars:
       user_request: >
         Continue onboarding.
@@ -561,7 +552,16 @@ tests:
         their editor after MCP configuration). There are no flags in
         the project yet -- no `variation()` calls anywhere in the
         codebase. The project key is "web-app".
-      max_turns: 18
+
+        LAUNCHDARKLY_ONBOARDING.md exists at the repo root with:
+          - Step 0 (Log): done
+          - Step 1 (Explore): done — Node.js Express, npm
+          - Step 2 (MCP): done — hosted MCP, OAuth complete
+          - Step 3 (SDK): done — @launchdarkly/node-server-sdk installed
+          - Step 4 (First flag): not started
+          - Next step: Create first feature flag
+          - projectKey: web-app, envKey: test
+      max_turns: 10
     assert:
       - type: javascript
         value: |
@@ -604,7 +604,7 @@ tests:
         value: |
           // Should not re-narrate the kickoff (no fresh "let me explore",
           // no re-installing companion skills, no re-prompting for
-          // account_status, no "let me detect the agent" boilerplate).
+          // no "let me detect the agent" boilerplate).
           const text = (output.first_assistant_text || output.response || '').toLowerCase();
           const restartSignals = [
             /let'?s start by exploring/,
@@ -647,36 +647,25 @@ tests:
       - type: llm-rubric
         value: |
           The user said "Continue onboarding" -- per the onboardingV2
-          SKILL.md "Resume After Restart" section, the agent must re-survey
-          state silently (probe MCP via a tool call, scan deps for the SDK,
-          check for flag-evaluation calls) instead of re-running the kickoff.
+          SKILL.md "Resume After Restart" section, the agent checks
+          LAUNCHDARKLY_ONBOARDING.md first (which shows MCP done, SDK done,
+          next step is first flag), then optionally probes MCP to verify.
 
-          In this scenario MCP is configured (the probe will succeed against
-          the mocks), the SDK is installed and initialized
-          (@launchdarkly/node-server-sdk in package.json + initialization in
-          src/launchdarkly.js), and no flags exist yet. Per the Resume rules
-          table, the agent should land on "MCP live, SDK present, no flag
-          -> resume at Step 4 (first flag)" and acknowledge the existing
-          setup ("You're connected and the SDK is installed. Creating your
-          first flag now.").
-
-          The structured output has two text fields: `first_assistant_text`
-          (the opening reply, where the agent should acknowledge the
-          re-surveyed state) and `response` (the final wrap-up). Use
-          `first_assistant_text` for criteria 1 and 3, and either field
-          for criterion 2.
+          In this scenario the onboarding log, MCP, and SDK are all in
+          place. No flags exist yet. The agent should land on "first flag"
+          and proceed.
 
           Evaluate:
           1. Did the opening reply acknowledge that work was already done
-             (re-surveyed state, mentions MCP being connected and the SDK
-             being installed) without re-narrating Step 1 / Step 2 /
-             Step 3?
-          2. Did the agent correctly identify creating the first flag
-             (Step 4 / Ship) as the next action -- in either field?
-          3. Did the opening reply avoid running or recommending the
-             kickoff actions again (no fresh project-exploration narrative,
-             no re-installing companion skills, no account_status question,
-             no re-prompting for MCP setup)?
+             (reads the log or recognizes MCP + SDK are in place) without
+             re-narrating the kickoff or earlier steps?
+          2. Did the agent correctly identify creating the first flag as
+             the next action -- in either `first_assistant_text` or
+             `response`?
+          3. Did the opening reply avoid running or recommending completed
+             actions again (no fresh project-exploration narrative, no
+             re-installing companion skills, no re-prompting for MCP
+             setup)?
 
           Score 1.0 if all three are met. Deduct 0.33 per missed criterion.
         metric: resume_quality
@@ -695,31 +684,22 @@ tests:
               assistant turn).
 
           The scenario: the user said "Continue onboarding" after a
-          restart. MCP is configured, SDK is installed and initialized,
-          no flags exist yet. Per the SKILL.md "Resume After Restart"
-          section, the agent must re-survey silently (probe MCP, scan
-          deps, check for flag evaluations), acknowledge the resume state
-          in ONE sentence, render a progress recap showing everything
-          already complete, and continue without preamble. This
-          effectively mandates fast-mode narrative rules (no roadmap
-          table, no re-narrating finished stages) plus an explicit
-          acknowledgement line that the work so far is recognized.
+          restart. The onboarding log shows MCP done, SDK done, next step
+          is first flag. The agent should read the log (or detect live
+          state), acknowledge the resume, and proceed directly to creating
+          the first flag.
 
           Grade these four beats, 0.25 each:
 
           (1) Plan upfront — the first reply acknowledges the resume
               state in a single sentence and states the next action
-              (landing on Step 4 / Ship). No roadmap table, no
-              "I'll start by exploring", no re-asking account_status.
-              Equivalent of "You're connected and the SDK is installed.
-              Creating your first flag now." counts.
+              (creating the first flag). No roadmap table, no
+              "I'll start by exploring".
 
           (2) Along-the-way narration — mid-run turns in `assistant_turns`
               include a progress recap block (✓ and → markers) on
-              substantive replies, showing what was confirmed during the
-              re-survey (MCP connected, SDK installed) and what is
-              happening now. Each meaningful action is followed by a
-              terse "what I just did" line.
+              substantive replies, showing what was confirmed complete
+              (MCP connected, SDK installed) and what is happening now.
 
           (3) Value framing — somewhere in the run the agent names the
               actual payoff the user gets — a live feature flag, a visible
@@ -729,8 +709,8 @@ tests:
           (4) Completion signal — the final reply unambiguously signals
               arrival ("Your first flag is live and ready to use." or an
               equivalent fact statement). If the run was soft-terminated
-              before reaching Step 4 completion, the last turn should
-              still state the current status as a fact.
+              before reaching completion, the last turn should still state
+              the current status as a fact.
 
           Score 1.0 if all four beats are met. Deduct 0.25 per missed
           beat. If `assistant_turns` is empty, score 0.
@@ -748,8 +728,16 @@ tests:
   #     toggling the flag on
   #   - then toggle the flag on
   # No targeting rules at this step -- it's a proof-of-life demo.
+  #
+  # Uses `full` provider (allow_builtins: true) so Write/Edit tool calls
+  # are recorded in the trajectory and the assertion that checks the agent
+  # avoids hardcoding SDK keys can inspect the written code.
+  #
+  # `mock_files` scaffolds the existing codebase so the agent's Read/Glob
+  # calls return real content immediately instead of hitting an empty dir.
   # ------------------------------------------------------------------
   - description: "First flag (Step 4): creates kebab-case boolean flag, gates toggle behind off_state_confirmed ask-question, no premature targeting"
+    providers: [full]
     vars:
       user_request: >
         Create my first feature flag in LaunchDarkly. The SDK is already
@@ -764,7 +752,38 @@ tests:
         For demo purposes, we want a boolean flag wrapping a small
         feature in src/server.js. Suggested key direction: something
         like `show-greeting` or similar -- you choose a sensible name.
-      max_turns: 20
+      # 15 turns: agent reads 4-6 mock files before substantive work;
+      # 10 was too tight for the full create->ask->write->toggle sequence.
+      max_turns: 15
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": {
+              "express": "^4.18.0",
+              "@launchdarkly/node-server-sdk": "^9.0.0"
+            }
+          }
+        "src/launchdarkly.js": |
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          ldClient.waitForInitialization();
+          module.exports = ldClient;
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+        ".env.example": |
+          LAUNCHDARKLY_SDK_KEY=sdk-your-key-here
+      # The off_state_confirmed ask-question must be answered for the agent
+      # to proceed to the toggle step. Without this, the flow stalls after
+      # create-flag and calls_toggle_to_verify / asks_off_state_before_toggle
+      # can never pass.
+      mock_ask_question_answers:
+        - ["confirmed"]
     assert:
       - type: javascript
         value: |
@@ -955,23 +974,27 @@ tests:
   # Test 6: Narrative quality, end-to-end, full mode. Clean Node.js
   # Express repo with no LaunchDarkly presence and no MCP configured --
   # experience detection lands on FULL MODE per the skill. The agent
-  # should flow through all four decision points (account_status,
-  # mcp_decision, sdk_install_mode, off_state_confirmed) and arrive at
+  # should flow through the decision points (mcp_decision,
+  # sdk_key_setup, sdk_install_mode, off_state_confirmed) and arrive at
   # Step 4's completion line. `mock_ask_question_answers` pins each
   # answer so the arc advances instead of stalling.
   #
   # The codebase_context names a concrete entrypoint (src/server.js
   # with a /hello endpoint) so the agent wires the flag into the
-  # existing app rather than scaffolding a new demo. Scaffolding
-  # triggers `npm start` on the generated project, which hangs the
-  # harness -- Bash calls block until the spawned process exits, and
-  # a real dev server never does. Matches Test 5's strategy.
+  # existing app rather than scaffolding a new demo.
+  #
+  # Uses `lean` provider (allow_builtins: false) because this test
+  # only measures narrative quality (progress recaps, completion
+  # language). No assertions check for Write/Edit tool calls, so
+  # builtins are not needed. Using lean eliminates real npm/npx
+  # network calls that would otherwise fire during SDK install.
   #
   # The test isolates narrative quality as its own signal: regressions
   # show up here as a single red test instead of being diluted across
   # the weighted scores of Tests 3/4/5.
   # ------------------------------------------------------------------
   - description: "Narrative quality: full-mode arc narrates plan upfront, states progress along the way, names value at completion, and signals done"
+    providers: [lean]
     vars:
       user_request: >
         Onboard me to LaunchDarkly. Project key is "web-app".
@@ -985,17 +1008,17 @@ tests:
         yet. The repo uses npm. For Step 4, add the flag-gated element
         to the existing `/hello` endpoint in src/server.js -- do not
         scaffold a new demo app.
-      max_turns: 22
+      max_turns: 15
       # Each sub-array is the `selected` IDs returned for the nth
       # ask-question call. Ordered to match the skill's decision points:
-      #   1. account_status (Kickoff)       -> "yes"
-      #   2. mcp_decision (Step 2)          -> "yes"
-      #   3. sdk_install_mode (Step 3)      -> "auto"
+      #   1. mcp_decision (Step 2)          -> "yes"
+      #   2. sdk_install_mode (Step 3)      -> "auto"
+      #   3. sdk_key_setup (Step 3)         -> "agent_fetch"
       #   4. off_state_confirmed (Step 4)   -> "confirmed"
       mock_ask_question_answers:
         - ["yes"]
-        - ["yes"]
         - ["auto"]
+        - ["agent_fetch"]
         - ["confirmed"]
     assert:
       - type: javascript
@@ -1056,7 +1079,7 @@ tests:
           presence and no MCP configured. Per the SKILL.md "Experience
           Detection" section, this is FULL MODE. The agent runs the whole
           arc end-to-end: kickoff with welcome + payoff + four-row
-          roadmap, account_status question, MCP setup, SDK install, first
+          roadmap, MCP setup, SDK install, SDK key setup, first
           flag creation, OFF-state confirmation, toggle ON, completion.
           The user confirmed each decision point as it came up (account
           ready, set up MCP, auto install, flag is off) so the arc flows
@@ -1112,3 +1135,384 @@ tests:
           score 0.
         metric: narrative_quality
         weight: 3
+
+  # ------------------------------------------------------------------
+  # Test 7: SDK key blocking gate (D7). The agent has reached Step 3
+  # with the SDK package installed but no credentials wired. Per the
+  # SKILL.md the agent MUST call ask-question with sdk_key_setup
+  # before writing any keys to disk or fetching them via MCP.
+  #
+  # Uses `full` provider so Write/Edit tool calls are recorded in the
+  # trajectory. The `no_premature_key_write` assertion checks that no
+  # Write to .env happens before the sdk_key_setup ask-question call.
+  #
+  # `mock_files` scaffolds package.json so the agent sees the expected
+  # project state without scanning an empty fixture directory.
+  # ------------------------------------------------------------------
+  - description: "SDK key gate: asks sdk_key_setup before writing credentials, does not silently fetch or hardcode keys"
+    providers: [full]
+    vars:
+      user_request: >
+        Set up the LaunchDarkly SDK in this project. MCP is already
+        configured. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0" and no LaunchDarkly
+        packages yet. MCP is already configured (hosted, OAuth complete).
+        The agent should install the SDK package and then ask how the
+        user wants credentials handled before writing any key values.
+      max_turns: 8
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": { "express": "^4.18.0" }
+          }
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+      mock_ask_question_answers:
+        - ["auto"]
+        - ["agent_fetch"]
+    assert:
+      - type: javascript
+        value: |
+          const calls = (output.trajectory || []).filter((t) => t.tool === 'ask-question');
+          const keyCall = calls.find((c) => {
+            const args = c.arguments || {};
+            const id = String(args.id || '').toLowerCase();
+            if (/sdk.key|credential|secret/.test(id)) return true;
+            const prompt = String(args.prompt || '').toLowerCase();
+            return /\b(sdk key|credential|secret|client.side id|mobile key)\b/.test(prompt);
+          });
+          const pass = Boolean(keyCall);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'sdk_key_setup question asked' : 'No SDK key decision point found in ' + calls.length + ' ask-question calls' };
+        metric: asks_sdk_key_setup
+        weight: 3
+
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const keyCallIdx = traj.findIndex((t) => {
+            if (t.tool !== 'ask-question') return false;
+            const id = String((t.arguments && t.arguments.id) || '').toLowerCase();
+            const prompt = String((t.arguments && t.arguments.prompt) || '').toLowerCase();
+            return /sdk.key|credential|secret/.test(id) || /\b(sdk key|credential|secret)\b/.test(prompt);
+          });
+          const envWriteBefore = traj.slice(0, Math.max(0, keyCallIdx)).find((t) => {
+            if (t.tool !== 'Write' && t.tool !== 'Edit' && t.tool !== 'write_file') return false;
+            const path = String((t.arguments && (t.arguments.path || t.arguments.file_path)) || '');
+            return /\.env/.test(path);
+          });
+          const pass = !envWriteBefore;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No .env write before sdk_key_setup question' : 'Wrote to .env before asking about credentials' };
+        metric: no_premature_key_write
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = ((output.first_assistant_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const hardcoded = /sdk-[a-f0-9]{8,}|ld-[a-f0-9]{8,}/.test(text);
+          const pass = !hardcoded;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'No hardcoded key values in chat' : 'Leaked a key value in response text' };
+        metric: no_hardcoded_keys
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 8: Onboarding log creation. On a fresh kickoff the agent
+  # must create LAUNCHDARKLY_ONBOARDING.md (Step 0) before doing
+  # substantive work. We check for a Write tool call targeting that
+  # file name.
+  #
+  # Uses `full` provider so Write tool calls appear in the trajectory.
+  # `mock_files` scaffolds just the package.json so the agent can
+  # confirm the project exists; no LAUNCHDARKLY_ONBOARDING.md is
+  # scaffolded (that's the file the test expects the agent to CREATE).
+  # ------------------------------------------------------------------
+  - description: "Onboarding log: creates LAUNCHDARKLY_ONBOARDING.md early in the run"
+    providers: [full]
+    vars:
+      user_request: >
+        Onboard me to LaunchDarkly. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0". No existing
+        LaunchDarkly integration. No LAUNCHDARKLY_ONBOARDING.md
+        exists yet. The repo uses npm.
+      max_turns: 5
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": { "express": "^4.18.0" }
+          }
+    assert:
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const writeCall = traj.find((t) => {
+            if (t.tool !== 'Write' && t.tool !== 'write_file' && t.tool !== 'Edit') return false;
+            const path = String((t.arguments && (t.arguments.path || t.arguments.file_path || t.arguments.target_file)) || '');
+            return /LAUNCHDARKLY_ONBOARDING\.md/i.test(path);
+          });
+          const pass = Boolean(writeCall);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'LAUNCHDARKLY_ONBOARDING.md created via ' + writeCall.tool : 'No Write call targeting LAUNCHDARKLY_ONBOARDING.md' };
+        metric: creates_onboarding_log
+        weight: 3
+
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const logIdx = traj.findIndex((t) => {
+            if (t.tool !== 'Write' && t.tool !== 'write_file' && t.tool !== 'Edit') return false;
+            const path = String((t.arguments && (t.arguments.path || t.arguments.file_path || t.arguments.target_file)) || '');
+            return /LAUNCHDARKLY_ONBOARDING\.md/i.test(path);
+          });
+          const firstMcpTool = traj.findIndex((t) => {
+            return ['create-flag', 'create-feature-flag', 'toggle-flag', 'update-feature-flag', 'get-environments'].includes(t.tool);
+          });
+          const pass = logIdx >= 0 && (firstMcpTool < 0 || logIdx < firstMcpTool);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Log created at idx ' + logIdx + ' before MCP tools' : 'Log idx=' + logIdx + ' firstMCP=' + firstMcpTool };
+        metric: log_before_mcp_work
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 9: Correct SDK dependency suggestion. Given a Node.js
+  # Express server, the agent should identify and suggest
+  # @launchdarkly/node-server-sdk (not a client-side or React SDK).
+  # ------------------------------------------------------------------
+  - description: "SDK suggestion: identifies correct server-side SDK package for Node.js Express"
+    providers: [lean]
+    vars:
+      user_request: >
+        Add LaunchDarkly to this project. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0". No existing
+        LaunchDarkly integration. The app is a backend API serving
+        JSON endpoints. No frontend, no React, no browser code.
+        MCP is configured.
+      max_turns: 6
+    assert:
+      - type: javascript
+        value: |
+          const text = ((output.kickoff_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const turns = (output.assistant_turns || []).map((t) => String((t && t.text) || '').toLowerCase()).join('\n');
+          const all = text + '\n' + turns;
+          const correct = /@launchdarkly\/node-server-sdk|node.server.sdk/.test(all);
+          const wrong = [
+            /launchdarkly-react-client-sdk/,
+            /launchdarkly-js-client-sdk/,
+            /launchdarkly-react-native/,
+            /launchdarkly-flutter/,
+          ];
+          const wrongHit = wrong.find((re) => re.test(all));
+          const score = correct ? (wrongHit ? 0.5 : 1) : 0;
+          const pass = correct && !wrongHit;
+          return { pass, score, reason: 'correct=' + correct + ' wrongHit=' + Boolean(wrongHit) };
+        metric: correct_sdk_package
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = ((output.kickoff_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const turns = (output.assistant_turns || []).map((t) => String((t && t.text) || '').toLowerCase()).join('\n');
+          const all = text + '\n' + turns;
+          const serverSignals = /\b(server.side|backend|node\.js sdk)\b/.test(all);
+          const pass = serverSignals;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Correctly identified as server-side' : 'Did not identify stack as server-side' };
+        metric: identifies_server_side
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 10: MCP decision point. When MCP is not yet configured,
+  # the agent must call ask-question with the mcp_decision form
+  # before attempting MCP setup.
+  # ------------------------------------------------------------------
+  - description: "MCP gate: asks mcp_decision before attempting MCP configuration"
+    providers: [lean]
+    vars:
+      user_request: >
+        Set up LaunchDarkly in this project. Project key is "web-app".
+      codebase_context: >
+        Single-package Node.js Express server at the repo root.
+        package.json declares "express": "^4.18.0". No existing
+        LaunchDarkly integration. MCP is NOT configured -- no
+        LaunchDarkly MCP server in the agent's settings. The
+        repo uses npm. Cursor is the detected coding agent.
+      max_turns: 6
+      mock_ask_question_answers:
+        - ["yes"]
+    assert:
+      - type: javascript
+        value: |
+          const calls = (output.trajectory || []).filter((t) => t.tool === 'ask-question');
+          const mcpCall = calls.find((c) => {
+            const args = c.arguments || {};
+            const id = String(args.id || '').toLowerCase();
+            if (/mcp/.test(id)) return true;
+            const prompt = String(args.prompt || '').toLowerCase();
+            return /\bmcp\b/.test(prompt) && /(set up|configure|install|recommend)/.test(prompt);
+          });
+          const pass = Boolean(mcpCall);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'mcp_decision question asked' : 'No MCP decision point in ' + calls.length + ' ask-question calls' };
+        metric: asks_mcp_decision
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = ((output.first_assistant_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const turns = (output.assistant_turns || []).map((t) => String((t && t.text) || '').toLowerCase()).join('\n');
+          const all = text + '\n' + turns;
+          const explains = /\b(from (this|the|your) editor|without (switching|leaving)|toggle.*from here)\b/.test(all);
+          const pass = explains;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Explains MCP benefit' : 'No explanation of why MCP matters' };
+        metric: explains_mcp_value
+        weight: 1
+
+  # ------------------------------------------------------------------
+  # Test 11: Code modification — flag-gated code. When creating the
+  # first flag, the agent must write flag-gated code into the app
+  # (the "aha" moment). We check for a Write/Edit tool call targeting
+  # a source file (not .env, not .md).
+  #
+  # Uses `full` provider so Write/Edit calls appear in the trajectory.
+  # `mock_files` provides the actual source files so the agent can
+  # Read src/server.js and Edit it in-place rather than creating a
+  # file from scratch against an empty fixture directory.
+  # ------------------------------------------------------------------
+  - description: "Aha moment: writes flag-gated code into the app source during first flag creation"
+    providers: [full]
+    vars:
+      user_request: >
+        Create my first feature flag. SDK is wired up. Project key
+        is "web-app".
+      codebase_context: >
+        All onboarding through SDK install is complete. SDK installed
+        at @launchdarkly/node-server-sdk@^9.0.0, initialized in
+        src/launchdarkly.js. MCP configured. No flags exist yet.
+        The app has a single endpoint in src/server.js:
+
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+
+        Add the flag-gated element to the existing /hello endpoint
+        in src/server.js.
+      max_turns: 10
+      mock_files:
+        "package.json": |
+          {
+            "name": "my-app",
+            "version": "1.0.0",
+            "scripts": { "start": "node src/server.js" },
+            "dependencies": {
+              "express": "^4.18.0",
+              "@launchdarkly/node-server-sdk": "^9.0.0"
+            }
+          }
+        "src/launchdarkly.js": |
+          const LaunchDarkly = require('@launchdarkly/node-server-sdk');
+          const ldClient = LaunchDarkly.init(process.env.LAUNCHDARKLY_SDK_KEY);
+          ldClient.waitForInitialization();
+          module.exports = ldClient;
+        "src/server.js": |
+          const express = require('express');
+          const app = express();
+          app.get('/hello', (req, res) => res.send('Hello, world!'));
+          app.listen(3000);
+        ".env.example": |
+          LAUNCHDARKLY_SDK_KEY=sdk-your-key-here
+      mock_ask_question_answers:
+        - ["confirmed"]
+    assert:
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const codeWrite = traj.find((t) => {
+            if (t.tool !== 'Write' && t.tool !== 'Edit' && t.tool !== 'write_file' && t.tool !== 'str_replace_editor') return false;
+            const path = String((t.arguments && (t.arguments.path || t.arguments.file_path || t.arguments.target_file)) || '');
+            return /\.(js|ts|jsx|tsx|py|rb|go|java|cs)$/.test(path) && !/\.env|\.md|\.json|\.yaml|\.yml/.test(path);
+          });
+          const pass = Boolean(codeWrite);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Wrote flag-gated code to ' + (codeWrite.arguments && (codeWrite.arguments.path || codeWrite.arguments.file_path || '')) : 'No source file write in trajectory' };
+        metric: writes_flag_gated_code
+        weight: 3
+
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const codeWrites = traj.filter((t) => {
+            if (t.tool !== 'Write' && t.tool !== 'Edit' && t.tool !== 'write_file' && t.tool !== 'str_replace_editor') return false;
+            const path = String((t.arguments && (t.arguments.path || t.arguments.file_path || t.arguments.target_file)) || '');
+            return /\.(js|ts|jsx|tsx|py|rb|go|java|cs)$/.test(path);
+          });
+          const hasVariation = codeWrites.some((t) => {
+            const content = String((t.arguments && (t.arguments.contents || t.arguments.new_string || t.arguments.new_str || '')) || '');
+            return /variation|useFlags|useLDClient|ldClient|ld_client|LDClient/.test(content);
+          });
+          const pass = hasVariation;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Flag evaluation call found in written code' : 'No variation/useFlags call in code writes' };
+        metric: code_evaluates_flag
+        weight: 3
+
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const created = tools.includes('create-feature-flag') || tools.includes('create-flag');
+          return { pass: created, score: created ? 1 : 0, reason: created ? 'Flag creation tool called' : 'No flag creation call' };
+        metric: calls_create_flag
+        weight: 2
+
+  # ------------------------------------------------------------------
+  # Test 12: Full-stack SDK type selection. A Next.js app has both
+  # server and client surfaces. The agent should ask whether to
+  # install frontend, backend, or both SDKs.
+  # ------------------------------------------------------------------
+  - description: "SDK type: full-stack Next.js app triggers question about frontend/backend/both SDK scope"
+    providers: [lean]
+    vars:
+      user_request: >
+        Add LaunchDarkly to this project. Project key is "web-app".
+      codebase_context: >
+        Next.js 14 app using the App Router. package.json declares
+        "next": "^14.0.0", "react": "^18.0.0". The project has both
+        server-side API routes (app/api/hello/route.ts) and client
+        components (app/page.tsx with "use client" directive). No
+        existing LaunchDarkly integration. MCP is configured. The
+        repo uses npm.
+      max_turns: 6
+    assert:
+      - type: javascript
+        value: |
+          const calls = (output.trajectory || []).filter((t) => t.tool === 'ask-question');
+          const sdkScopeCall = calls.find((c) => {
+            const args = c.arguments || {};
+            const prompt = String(args.prompt || '').toLowerCase();
+            const opts = Array.isArray(args.options) ? args.options : [];
+            const optText = opts.map((o) => String(((o && o.id) || '') + '|' + ((o && o.label) || '')).toLowerCase()).join(' ');
+            const combined = prompt + ' ' + optText;
+            return (/\b(frontend|client|server|backend|both)\b/.test(combined) && /\bsdk\b/.test(combined));
+          });
+          const pass = Boolean(sdkScopeCall);
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Asked about SDK scope (frontend/backend/both)' : 'No SDK scope question in ' + calls.length + ' ask-question calls' };
+        metric: asks_sdk_scope
+        weight: 3
+
+      - type: javascript
+        value: |
+          const text = ((output.kickoff_text || '') + '\n' + (output.response || '')).toLowerCase();
+          const turns = (output.assistant_turns || []).map((t) => String((t && t.text) || '').toLowerCase()).join('\n');
+          const all = text + '\n' + turns;
+          const recognizes = /\bnext\.?js\b/.test(all) && (/\bserver\b.*\bclient\b|\bclient\b.*\bserver\b|\bfull.stack\b|\bboth\b.*\bsdk\b/).test(all);
+          const pass = recognizes;
+          return { pass, score: pass ? 1 : 0, reason: pass ? 'Recognized Next.js as full-stack with both surfaces' : 'Did not identify dual server+client surfaces' };
+        metric: recognizes_fullstack
+        weight: 2

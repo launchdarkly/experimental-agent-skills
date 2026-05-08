@@ -18,6 +18,10 @@ prompts: []
 providers: []
 
 defaultTest:
+  # Each test case must reach this weighted-average score to count as
+  # passing. Evaluated per-test so a single critical path failure can't
+  # be masked by other tests passing.
+  threshold: 0.75
   options:
     provider: "{{env.RUBRIC_MODEL}}"
     transform: file://./transform.js

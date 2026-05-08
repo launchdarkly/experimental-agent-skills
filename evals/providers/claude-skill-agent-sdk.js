@@ -111,6 +111,17 @@
  *   mock_ask_question_answers   - optional array of `selected` arrays returned by
  *                                 successive `ask-question` calls (only honored when
  *                                 `expose_ask_question: true` is set on the provider)
+ *   mock_files                  - optional object mapping relative file paths to string
+ *                                 content. Files are written into the isolated test cwd
+ *                                 before the agent runs so that Read/Glob/Bash tool calls
+ *                                 against the codebase return real data rather than "file
+ *                                 not found". Each `callApi` invocation gets its own temp
+ *                                 directory, so tests that scaffold different package.json
+ *                                 states cannot conflict even when run concurrently.
+ *                                 Example:
+ *                                   mock_files:
+ *                                     "package.json": '{"dependencies":{"express":"^4"}}'
+ *                                     "src/server.js": "const express = require('express')"
  *
  * Environment variables:
  *   AGENT_MODEL          - SUT model (default claude-sonnet-4-20250514).
@@ -137,14 +148,6 @@ const MODEL =
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SKILLS_ROOT = path.join(REPO_ROOT, "skills");
-// Fixture cwds live OUTSIDE the repo tree (under os.tmpdir()) so the
-// Claude Agent SDK does not walk up and discover the repo-root .mcp.json.
-// That .mcp.json points at the real hosted LaunchDarkly MCP servers and,
-// when discovered, makes the agent emit "please open this URL to
-// authenticate with LaunchDarkly" prompts in the response - which masks
-// whatever the skill was supposed to do. Anchoring fixtures in a system
-// temp dir keeps the SDK's project-discovery scope clean.
-const FIXTURES_ROOT = path.join(os.tmpdir(), "ld-skill-eval-fixtures");
 
 const toolDefs = JSON.parse(
   fs.readFileSync(path.join(__dirname, "../tools/definitions.json"), "utf-8"),
@@ -173,52 +176,54 @@ function resolveSkillSource(slug) {
 }
 
 /**
- * Build (or reuse) an isolated cwd for the given skill slug:
- *   <fixtures>/<slug>/.claude/skills/<slug>  -> symlink to skill source
+ * Create a fully-isolated cwd for a single test invocation.
  *
- * Uses an idempotent symlink so concurrent test workers reusing the
- * same provider instance don't fight each other. The directory is
- * gitignored.
+ * Each callApi call gets its own temp directory under os.tmpdir() so
+ * concurrent tests for the same skill slug (which may scaffold different
+ * codebase states via `mock_files`) cannot interfere with each other.
+ * The caller is responsible for calling fs.rmSync on the returned cwd
+ * after the test completes.
+ *
+ *   <tmpdir>/ld-eval-<slug>-XXXXXX/
+ *     .claude/skills/<slug>/  -> symlink to skill source
+ *     .isolated-claude-config/
+ *     .mcp.json               (empty stub)
+ *     [mock_files...]         (scaffolded from test vars)
  */
-function ensureFixtureCwd(slug, source) {
-  const cwd = path.join(FIXTURES_ROOT, slug);
-  const skillsDir = path.join(cwd, ".claude", "skills");
-  const link = path.join(skillsDir, slug);
+function createInvocationCwd(slug, skillSource) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `ld-eval-${slug}-`));
 
+  // Skill symlink — SDK discovers skills by scanning cwd/.claude/skills/.
+  const skillsDir = path.join(cwd, ".claude", "skills");
   fs.mkdirSync(skillsDir, { recursive: true });
-  let needsLink = true;
-  try {
-    const existing = fs.readlinkSync(link);
-    if (path.resolve(skillsDir, existing) === source) needsLink = false;
-  } catch {
-    // not a symlink yet; will create
-  }
-  if (needsLink) {
-    try {
-      fs.rmSync(link, { recursive: true, force: true });
-    } catch {}
-    fs.symlinkSync(source, link, "dir");
-  }
+  fs.symlinkSync(skillSource, path.join(skillsDir, slug), "dir");
 
   // Empty placeholder for CLAUDE_CONFIG_DIR so we don't pick up
   // machine-level managed/policy skills either.
   const isolatedConfig = path.join(cwd, ".isolated-claude-config");
   fs.mkdirSync(isolatedConfig, { recursive: true });
 
-  // Drop an empty .mcp.json in the fixture cwd so the SDK does NOT
-  // walk up the directory tree and load the repo-root .mcp.json (which
-  // points at the *real* hosted LaunchDarkly MCP servers and triggers
-  // an OAuth flow). The eval harness exposes a mocked LD MCP server
-  // via createSdkMcpServer; the only place that should provide MCP
-  // tools is that mock. Without this, skills whose body does not name
-  // a specific mocked tool can fall back to the real server and emit
-  // "please authorize" prompts in their response.
-  const mcpStub = path.join(cwd, ".mcp.json");
-  if (!fs.existsSync(mcpStub)) {
-    fs.writeFileSync(mcpStub, JSON.stringify({ mcpServers: {} }, null, 2));
-  }
+  // Drop an empty .mcp.json so the SDK does NOT walk up the directory
+  // tree and load the repo-root .mcp.json (which points at the real
+  // hosted LaunchDarkly MCP servers and triggers an OAuth flow).
+  fs.writeFileSync(path.join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: {} }, null, 2));
 
   return { cwd, isolatedConfig };
+}
+
+/**
+ * Write mock_files entries into the fixture cwd so that Read/Glob/Bash
+ * calls against the "codebase" return real data. Each entry is a relative
+ * path -> string content pair. Intermediate directories are created as
+ * needed.
+ */
+function scaffoldMockFiles(cwd, mockFiles) {
+  if (!mockFiles || typeof mockFiles !== "object") return;
+  for (const [relPath, content] of Object.entries(mockFiles)) {
+    const absPath = path.join(cwd, relPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, typeof content === "string" ? content : JSON.stringify(content, null, 2), "utf-8");
+  }
 }
 
 function clampMaxTurns(raw) {
@@ -285,9 +290,10 @@ class ClaudeSkillAgentSdk {
         `claude-skill-agent-sdk: could not find SKILL.md for slug "${this.skillSlug}" under ${SKILLS_ROOT}/`,
       );
     }
-    const { cwd, isolatedConfig } = ensureFixtureCwd(this.skillSlug, source);
-    this.cwd = cwd;
-    this.isolatedConfig = isolatedConfig;
+    // Store the skill source path; each callApi invocation creates its own
+    // isolated temp cwd via createInvocationCwd so concurrent test runs for
+    // the same skill don't share (and corrupt) each other's mock files.
+    this.skillSource = source;
   }
 
   id() {
@@ -309,11 +315,20 @@ class ClaudeSkillAgentSdk {
     )
       ? context.vars.mock_ask_question_answers
       : [];
+    const mockFiles = context?.vars?.mock_files || {};
 
     let userMessage = userRequest;
     if (codebaseContext) {
       userMessage += `\n\n<codebase_context>\n${codebaseContext}\n</codebase_context>`;
     }
+
+    // Create an isolated cwd for this invocation. Each test gets its own
+    // temp directory so concurrent runs for the same skill don't share
+    // state. Cleaned up in the finally block below.
+    const { cwd, isolatedConfig } = createInvocationCwd(this.skillSlug, this.skillSource);
+    // Scaffold any mock_files the test declared so Read/Glob/Bash calls
+    // return real content instead of "file not found".
+    scaffoldMockFiles(cwd, mockFiles);
 
     const sdk = await loadSdk();
     const { query, createSdkMcpServer, tool } = sdk;
@@ -479,8 +494,9 @@ class ClaudeSkillAgentSdk {
       this.exposeAskQuestion
         ? "An `ask-question` tool is available for blocking decision points where the skill says to ask the user a structured question with options. Use it for the question itself (the prompt + options) so the host can render a proper picker -- do not write the options as prose. Any OTHER text the skill instructs you to emit before or alongside that question (welcomes, payoffs, roadmaps, summaries, progress recaps, narration of what's about to happen) is normal prose: emit it as a regular text response in the same turn or earlier, not in place of the call."
         : null,
-      "If the user message includes a <codebase_context> block, treat it as the result of any codebase scan the skill would otherwise perform.",
-      "Do not start long-running foreground processes (dev servers, file watchers, daemons, REPLs). When the skill instructs you to run `npm run dev`, `next dev`, `flask run`, `rails server`, or any equivalent foreground process, simulate the action: state the command you would run and treat the server as if it were running successfully. Bash tool calls in this harness block until the spawned process exits, so a real dev server will hang the run indefinitely.",
+      "If the user message includes a <codebase_context> block, treat it as the authoritative description of the project. If you can also read files directly (Read/Glob/Bash), you may do so — the scaffolded files will match what the context describes.",
+      "Do not run package manager install commands (`npm install`, `npm ci`, `yarn add`, `pnpm add`, `pnpm install`). Simulate them as having completed successfully: state the command you would run and continue as if the package is now installed. Real installs hit the network and significantly slow evals.",
+      "Do not start dev servers or run port checks. When the skill instructs you to (a) check free ports (`lsof`, `netstat`, `ss`, etc.) or (b) start a dev server (`npm start`, `npm run dev`, `node src/server.js`, `next dev`, `flask run`, etc.) — whether foreground or background — skip the Bash call entirely. Instead, immediately tell the user the server is running on its default port and proceed to the very next step in the skill workflow (e.g. the ask-question confirmation gate). Do not pause, do not summarize and stop; continue executing the remaining skill steps in the same response or the immediately following turn.",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -490,25 +506,23 @@ class ClaudeSkillAgentSdk {
     if (harnessServer) mcpServersMap["harness-ux"] = harnessServer;
 
     const queryOptions = {
-      cwd: this.cwd,
+      cwd,
       settingSources: ["project"],
       mcpServers: mcpServersMap,
       model: MODEL,
       maxTurns,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      // Disable on-disk session state. Promptfoo runs tests with
-      // concurrency >1 by default; two parallel queries sharing the
-      // same per-skill cwd would otherwise both try to write to
-      // <cwd>/.claude/projects/.../session.jsonl and deadlock. We
-      // also don't need session resumption for single-shot evals.
+      // Disable on-disk session state. Each callApi already gets its own
+      // temp cwd, but disabling persistSession also prevents the SDK from
+      // writing session files that could accumulate in os.tmpdir().
       persistSession: false,
       env: {
         ...process.env,
         // Redirect machine-level managed/policy skills lookup so we
         // don't accidentally inherit anything an admin installed at
         // ~/Library/Application Support/ClaudeCode/.claude/skills/.
-        CLAUDE_CONFIG_DIR: this.isolatedConfig,
+        CLAUDE_CONFIG_DIR: isolatedConfig,
       },
       agent: "eval-agent",
       agents: {
@@ -625,6 +639,39 @@ class ClaudeSkillAgentSdk {
           if (!kickoffSealed && hasKickoffSealingToolUse(msg)) {
             kickoffSealed = true;
           }
+
+          // Track builtin tool calls (Bash, Read, Write, Edit, Glob, Grep,
+          // etc.) in the trajectory. MCP tool calls are already recorded via
+          // their mock callbacks; those have names prefixed with "mcp__" in
+          // the SDK stream, so we exclude them here to avoid duplicates.
+          // Internal framework tools (Skill, ToolSearch) are excluded via
+          // KICKOFF_META_TOOLS — they're not agent actions.
+          // Recording builtins allows assertions to verify that the agent
+          // wrote a file (e.g. LAUNCHDARKLY_ONBOARDING.md) or read a source
+          // file, which was previously impossible because only MCP calls were
+          // captured.
+          const msgContent =
+            (msg && msg.message && msg.message.content) ||
+            (msg && msg.content) ||
+            null;
+          if (Array.isArray(msgContent)) {
+            for (const block of msgContent) {
+              if (
+                block &&
+                block.type === "tool_use" &&
+                typeof block.name === "string" &&
+                !block.name.startsWith("mcp__") &&
+                !KICKOFF_META_TOOLS.has(block.name)
+              ) {
+                trajectory.push({
+                  tool: block.name,
+                  arguments: block.input || {},
+                  turn: currentTurn,
+                  mock_response_preview: null,
+                });
+              }
+            }
+          }
         } else if (msg.type === "result") {
           resultMessage = msg;
           if (msg.subtype === "success" && typeof msg.result === "string") {
@@ -643,6 +690,14 @@ class ClaudeSkillAgentSdk {
           error: `claude-skill-agent-sdk failed: ${errMessage}`,
         };
       }
+    } finally {
+      // Clean up the per-invocation temp directory. Errors here are
+      // non-fatal — os.tmpdir() is ephemeral and will be cleaned on reboot.
+      try {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
     }
 
     // If the run terminated before a `result success` (max_turns, error
@@ -654,7 +709,7 @@ class ClaudeSkillAgentSdk {
     }
 
     if (debug) {
-      const debugDump = path.join(this.cwd, "_debug-messages.json");
+      const debugDump = path.join(os.tmpdir(), `ld-eval-debug-${this.skillSlug}-${Date.now()}.json`);
       try {
         fs.writeFileSync(
           debugDump,
