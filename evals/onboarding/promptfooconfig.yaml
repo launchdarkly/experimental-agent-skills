@@ -975,7 +975,7 @@ tests:
   # Express repo with no LaunchDarkly presence and no MCP configured --
   # experience detection lands on FULL MODE per the skill. The agent
   # should flow through the decision points (mcp_decision,
-  # mcp_decision, sdk_install_mode, off_state_confirmed) and arrive at
+  # sdk_key_setup, sdk_install_mode, off_state_confirmed) and arrive at
   # Step 4's completion line. `mock_ask_question_answers` pins each
   # answer so the arc advances instead of stalling.
   #
@@ -1004,7 +1004,7 @@ tests:
         that runs `node src/server.js`. The entrypoint src/server.js
         defines an Express app with a `/hello` endpoint that returns
         "Hello, world!" No @launchdarkly/* in dependencies, no
-        LDClient.init calls, no existing flags.         MCP is not configured
+        LDClient.init calls, no existing flags. MCP is not configured
         yet. The repo uses npm. For Step 4, add the flag-gated element
         to the existing `/hello` endpoint in src/server.js -- do not
         scaffold a new demo app.
