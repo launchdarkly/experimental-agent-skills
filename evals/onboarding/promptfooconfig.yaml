@@ -389,7 +389,7 @@ tests:
           module.exports = ldClient;
 
         The client is imported and used in src/server.js. There is no
-        existing flag yet.         MCP is already configured.
+        existing flag yet. MCP is already configured.
       max_turns: 8
     assert:
       - type: javascript
