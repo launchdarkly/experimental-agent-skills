@@ -131,13 +131,13 @@ Then ask how they want to add the token to the MCP config:
 1. Tell them the config file path for their agent (see [MCP Config Templates](references/mcp-config-templates.md))
 2. Tell them to set `LAUNCHDARKLY_ACCESS_TOKEN` as the value — either as an environment variable or directly in the config file
 3. Remind them to add the config file to `.gitignore` if the token is inline
-4. Wait for them to confirm, then proceed to Step 5 (Restart and Auto-Verify)
+4. Wait for them to confirm, then proceed to Step 5 (Verify MCP Tools)
 
 **If the user wants agent-assisted setup:**
 1. Ensure the config file is in `.gitignore` before writing
 2. Write the config per [MCP Config Templates](references/mcp-config-templates.md)
 3. Remind the user that the token will be visible in the config file and conversation history
-4. Proceed to Step 5 (Restart and Auto-Verify)
+4. Proceed to Step 5 (Verify MCP Tools)
 
 ## Edge Cases
 
