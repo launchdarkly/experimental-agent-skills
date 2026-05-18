@@ -147,7 +147,8 @@ The `mcp/aiconfigs` URL is deprecated. Replace it with the unified server.
 }
 ```
 
-The unified server handles both feature flags and AgentControl. If you also had `mcp/fm`, you can remove it — the unified server covers the same functionality.
+The unified server handles both feature flags and AgentControl. If you also had `mcp/fm`, you do not need to remove it — `mcp/fm` still works and mirrors the unified server.
+
 
 **Note:** Do not auto-migrate. Always ask the user via a blocking question before making changes (see [mcp-configure Edge Cases](../SKILL.md#edge-cases)).
 
