@@ -78,7 +78,7 @@ onboarding/
 
 ## Related
 
-- [Onboarding Router](../onboarding-router/) — picks this skill (or AI Configs / Experiments / Observability) based on user intent.
+- [Onboarding Router](../onboarding-router/) — picks this skill (or AgentControl / Experiments / Observability) based on user intent.
 - [`launchdarkly-flag-create`](../feature-flags/launchdarkly-flag-create/) — installed during Step 3 and used optionally during Step 6.
 - [`launchdarkly-flag-discovery`](../feature-flags/launchdarkly-flag-discovery/), [`launchdarkly-flag-targeting`](../feature-flags/launchdarkly-flag-targeting/), [`launchdarkly-flag-cleanup`](../feature-flags/launchdarkly-flag-cleanup/) — companion flag-management skills installed in Step 3.
 

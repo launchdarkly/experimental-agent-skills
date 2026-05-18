@@ -1,14 +1,39 @@
 # MCP Config Templates
 
-Per-agent JSON snippets for configuring the LaunchDarkly hosted MCP server. All configurations use OAuth -- no API keys required.
+Per-agent JSON snippets for configuring the LaunchDarkly hosted MCP server. All configurations use OAuth — no API keys required.
 
 Source: https://launchdarkly.com/docs/home/getting-started/mcp-hosted
+
+## Unified Server (Recommended)
+
+Use the unified server URL for new configurations:
+
+| Server | URL | Purpose |
+|--------|-----|---------|
+| LaunchDarkly (unified) | `https://mcp.launchdarkly.com/mcp/launchdarkly` | Feature flags and AgentControl |
+
+**Legacy URLs:**
+- `mcp/fm` — still works, mirrors the unified server. No migration needed.
+- `mcp/aiconfigs` — **deprecated**. Migrate to the unified server (see [mcp-configure Edge Cases](../SKILL.md#edge-cases)).
 
 ## Cursor
 
 Config file: `.cursor/mcp.json` in the project root.
 
-### Feature management only
+### Unified server (recommended)
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
+      "headers": {}
+    }
+  }
+}
+```
+
+### Legacy feature management only (still supported)
 
 ```json
 {
@@ -21,43 +46,26 @@ Config file: `.cursor/mcp.json` in the project root.
 }
 ```
 
-### Both servers
-
-```json
-{
-  "mcpServers": {
-    "LaunchDarkly feature management": {
-      "url": "https://mcp.launchdarkly.com/mcp/fm",
-      "headers": {}
-    },
-    "LaunchDarkly AI Configs": {
-      "url": "https://mcp.launchdarkly.com/mcp/aiconfigs",
-      "headers": {}
-    }
-  }
-}
-```
-
-**After adding the config:** enable the servers and complete OAuth in Cursor's MCP UI. Use [MCP UI links — Cursor](mcp-ui-links.md#clients) (HTTPS doc + optional `command:` links); do not rely only on nested Settings menu paths.
+**After adding the config:** enable the server and complete OAuth in Cursor's MCP UI. Use [MCP UI links — Cursor](mcp-ui-links.md#clients) (HTTPS doc + optional `command:` links); do not rely only on nested Settings menu paths.
 
 ## Claude Code
 
 Config file: `.mcp.json` in the project root, or `~/.claude.json` for global config.
 
-### Feature management only
+### Unified server (recommended)
 
 ```json
 {
   "mcpServers": {
-    "LaunchDarkly feature management": {
+    "LaunchDarkly": {
       "type": "http",
-      "url": "https://mcp.launchdarkly.com/mcp/fm"
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly"
     }
   }
 }
 ```
 
-### Both servers
+### Legacy feature management only (still supported)
 
 ```json
 {
@@ -65,10 +73,6 @@ Config file: `.mcp.json` in the project root, or `~/.claude.json` for global con
     "LaunchDarkly feature management": {
       "type": "http",
       "url": "https://mcp.launchdarkly.com/mcp/fm"
-    },
-    "LaunchDarkly AI Configs": {
-      "type": "http",
-      "url": "https://mcp.launchdarkly.com/mcp/aiconfigs"
     }
   }
 }
@@ -87,8 +91,8 @@ Configured via the GitHub web UI, not a local config file.
 ```json
 {
   "mcpServers": {
-    "LaunchDarkly feature management": {
-      "url": "https://mcp.launchdarkly.com/mcp/fm",
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
       "headers": {}
     }
   }
@@ -104,8 +108,8 @@ Windsurf uses a similar MCP configuration format. Add to the agent's MCP config:
 ```json
 {
   "mcpServers": {
-    "LaunchDarkly feature management": {
-      "url": "https://mcp.launchdarkly.com/mcp/fm"
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly"
     }
   }
 }
@@ -113,9 +117,44 @@ Windsurf uses a similar MCP configuration format. Add to the agent's MCP config:
 
 Consult Windsurf's documentation for the exact config file location.
 
+## Migrating from Deprecated mcp/aiconfigs
+
+The `mcp/aiconfigs` URL is deprecated. Replace it with the unified server.
+
+**Remove this:**
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly AI Configs": {
+      "url": "https://mcp.launchdarkly.com/mcp/aiconfigs",
+      "headers": {}
+    }
+  }
+}
+```
+
+**Replace with:**
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
+      "headers": {}
+    }
+  }
+}
+```
+
+The unified server handles both feature flags and AgentControl. If you also had `mcp/fm`, you do not need to remove it — `mcp/fm` still works and mirrors the unified server.
+
+
+**Note:** Do not auto-migrate. Always ask the user via a blocking question before making changes (see [mcp-configure Edge Cases](../SKILL.md#edge-cases)).
+
 ## Migrating from the Old Local Server
 
-If the user has the old npx-based server configured, replace it:
+If the user has the old npx-based server configured with an inline API key, replace it with the hosted unified server:
 
 **Remove this:**
 
@@ -134,7 +173,18 @@ If the user has the old npx-based server configured, replace it:
 }
 ```
 
-**Replace with the hosted config for the relevant agent** (see sections above).
+**Replace with the unified hosted server:**
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
+      "headers": {}
+    }
+  }
+}
+```
 
 Also remove any `LD_ACCESS_TOKEN` or `LAUNCHDARKLY_API_KEY` environment variables that were used for the local server. The hosted server handles authentication via OAuth.
 
