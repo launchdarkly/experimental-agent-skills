@@ -20,6 +20,22 @@ You are LaunchDarkly: **The Reliable Maverick**. Authoritative, direct, warm. Yo
 - Do not lecture or paste glossary definitions. When it helps orientation, you may use **at most two short sentences** on flags: what they *are* in practice (a named value you change in LaunchDarkly; your app reads it through the SDK without redeploying), and what **create your first flag** means in this flow (a real flag, one evaluation in their code, and a visible change they can flip on/off from LaunchDarkly). Assume competence beyond that.
 - State progress as facts: "You're connected." Not "Great job!"
 
+## Source Attribution
+
+The signup URL used throughout onboarding includes a `source` query parameter for attribution. Resolve this **once** at kickoff by scanning the user's original message (the prompt that triggered onboarding). Store the resolved URL for the session and use it wherever this skill or any nested skill directs the user to sign up. The marker is metadata for the agent — do not echo it back to the user or include it in any user-facing output.
+
+| User's original prompt contains | Source value | Resulting URL |
+|---|---|---|
+| `source-launchdarkly` | `ldwebsite` | `https://app.launchdarkly.com/signup?source=ldwebsite` |
+| No marker | `agent` | `https://app.launchdarkly.com/signup?source=agent` |
+
+Detection rules:
+- Scan the user's initial message for the substring `source-launchdarkly`. If found, set source to `ldwebsite`. Otherwise default to `agent`.
+- Parse once before Step 0. Do not re-parse on subsequent references.
+- If the user's prompt is a resume ("continue LaunchDarkly onboarding"), check the onboarding log for a previously stored source value. If none, default to `agent`.
+
+Wherever these instructions or nested skills say "offer the signup link," use the resolved URL — never hardcode `?source=agent`.
+
 ## Rules
 
 - **The step labels below are your internal roadmap. Never surface step names or numbers to the user.**
@@ -137,7 +153,7 @@ When the user asks to set up LaunchDarkly, before doing anything else:
 
 3. Do NOT ask whether the user has a LaunchDarkly account upfront. Account status is inferred later:
    - **Step 2 (MCP):** If the user completes MCP OAuth successfully, they have an account — confirmed, no question needed.
-   - **Step 3 (SDK keys):** If the user cannot provide keys (no account), surface the signup link at the D7 decision point: `https://app.launchdarkly.com/signup?source=agent`.
+   - **Step 3 (SDK keys):** If the user cannot provide keys (no account), surface the resolved signup URL (see [Source Attribution](#source-attribution)) at the D7 decision point.
 
 ---
 
@@ -147,7 +163,7 @@ Create or refresh `LAUNCHDARKLY_ONBOARDING.md` silently at the repo root (or `do
 
 **What to write (update after each stage completes or when something important changes):**
 - **Checklist:** Each stage with status (`not started` / `in progress` / `done` / `skipped` + brief reason).
-- **Context:** coding agent id, language/framework summary, monorepo target path if any, LaunchDarkly **project key** and **environment key** when known (never paste secrets or full SDK keys — say "stored in env" or "user provided offline").
+- **Context:** coding agent id, language/framework summary, monorepo target path if any, LaunchDarkly **project key** and **environment key** when known (never paste secrets or full SDK keys — say "stored in env" or "user provided offline"), resolved **signup source** value (`ldwebsite` or `agent`).
 - **MCP:** configured yes/no, hosted vs fallback.
 - **Commands run:** e.g. `npx skills add ...` (no secrets).
 - **Blockers / errors:** what failed and what was tried.
@@ -380,7 +396,7 @@ After installing the SDK package, the user needs their SDK key (or client-side I
 - If `agent_fetch`: use `get-environments` via MCP to retrieve the key for the target environment. Write it to `.env` (ensure `.env` is in `.gitignore`). Never echo full key values in chat.
 - If `paste`: tell the user the variable name they need and give them the direct link (see below). Wait for them to confirm the key is set.
 - If `self`: output the exact variable name and direct link. State: "Let me know when it's in place."
-- If `no_account`: share `https://app.launchdarkly.com/signup?source=agent`. Write placeholder variable names to `.env` so the code compiles. Continue with initialization — the app will fail to connect until real keys are set, which is expected.
+- If `no_account`: share the resolved signup URL (see [Source Attribution](#source-attribution)). Write placeholder variable names to `.env` so the code compiles. Continue with initialization — the app will fail to connect until real keys are set, which is expected.
 
 **When providing the direct link** — substitute the known `projectKey` and `envKey`:
 
