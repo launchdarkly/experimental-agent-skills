@@ -94,9 +94,17 @@ Restart is no longer required for Cursor or Claude Code after enabling an MCP se
 
 2. **Probe immediately.** After the user confirms the server is enabled, call a lightweight MCP tool (e.g. `list-feature-flags` with the user's project key). Do not ask the user whether MCP is working — just try it.
    - **Success** (normal response, even an empty flag list): MCP is live. Note it in the onboarding log and continue.
-   - **Failure** (tool not found, auth error, timeout): proceed to step 3.
+   - **Auth error** (401, 403, "unauthorized", "forbidden", or OAuth-related message): the server was found but authorization failed. Go to step 3a.
+   - **Tool not found or timeout** (tool not recognized, connection refused, no response): the editor hasn't picked up the server yet. Go to step 3b.
 
-3. **If the probe fails, suggest a restart.** Before asking the user to restart:
+3a. **Auth failure path.** The MCP server is reachable but OAuth is incomplete or expired — restarting the editor won't help.
+   - Tell the user: "The MCP server responded but authorization failed. In Cursor: open MCP settings, find the LaunchDarkly server, and click **Connect** to re-authorize. In Claude Code: the next MCP tool call should re-trigger the OAuth prompt."
+   - Use [MCP UI links](references/mcp-ui-links.md) to give the user a direct shortcut to their agent's MCP settings.
+   - Re-probe after the user confirms they re-authorized.
+   - If the re-probe succeeds: continue with onboarding.
+   - If it fails again: update the onboarding log with "MCP auth failed after re-authorization attempt", fall back to ldcli/API, and offer the retry one-liner (see step 4 below). Do **not** suggest a restart for a persistent auth problem.
+
+3b. **Server-not-found path.** The editor likely hasn't loaded the new MCP config yet.
    - **Update the onboarding log** (`LAUNCHDARKLY_ONBOARDING.md`) with the current state and set **Next step** to "Verify MCP after restart".
    - Tell the user: "The MCP tools aren't visible yet. Some editors need a restart to pick up new MCP servers. Restart your editor and say **'continue LaunchDarkly onboarding'** when you're back — I'll resume from here."
    - Be specific about how to restart: "Restart Cursor" / "reload Claude Code" / "refresh the Copilot agent" depending on what you detected in Step 1.
@@ -106,7 +114,7 @@ Restart is no longer required for Cursor or Claude Code after enabling an MCP se
    - If tools are now available: "MCP is connected." Continue with onboarding.
    - If tools still missing: fall back to ldcli/API. Note the fallback in the onboarding log. Do **not** block the rest of onboarding — remaining steps must still be completable without MCP. Offer a one-liner to retry later: "You can set up MCP anytime by clicking [quick install link] and restarting."
 
-5. If the failure looks like a config issue (wrong file path, missing OAuth, server not enabled), mention the likely cause so the user can fix it on their own time — but do not block progress.
+5. If the failure looks like a config issue (wrong file path, server not enabled), mention the likely cause so the user can fix it on their own time — but do not block progress.
 
 For **local `npx` server** verification, see [MCP Config Templates — Verify (local server)](references/mcp-config-templates.md#verify-local-server).
 
@@ -174,6 +182,7 @@ Then ask how they want to add the token to the MCP config:
 - Don't ask for or store API keys for the hosted server. The hosted server uses OAuth.
 - Don't auto-migrate from the deprecated `mcp/aiconfigs` — always ask via the blocking question.
 - Don't suggest restart as the first step — probe for tools immediately after the user enables the server.
+- Don't suggest restart for auth errors (401/403) — the server was found, so a restart won't help. Guide the user to re-authorize instead.
 - Don't handle the access token for local MCP without asking the user first via the D4-LOCAL decision point.
 
 ## References
