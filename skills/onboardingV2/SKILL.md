@@ -93,18 +93,20 @@ Both modes enforce the same outcomes: MCP connected, SDK installed, first flag e
 
 ## Resume After Restart
 
-If the user says "continue onboarding" — a restart just happened. Do not ask what was happening. Check for `LAUNCHDARKLY_ONBOARDING.md` first, then fall back to live detection.
+If the user says "continue onboarding" or "continue LaunchDarkly onboarding" — a restart just happened or the user is returning to the flow. Do not ask what was happening. Check for `LAUNCHDARKLY_ONBOARDING.md` first, then fall back to live detection.
 
 **Resume sequence:**
 
 1. **Check the onboarding log.** Look for `LAUNCHDARKLY_ONBOARDING.md` at the repo root (or `docs/LAUNCHDARKLY_ONBOARDING.md`). If it exists, read it — the **Next step** field tells you where to resume. Align with the log's checklist and skip anything marked `done`.
 
-2. **If no log exists, re-survey live state in order:**
+2. **Show a brief "where we are" summary.** If the log exists, tell the user in one sentence what was completed and what's next. Example: "You've got the SDK installed. I'm checking whether MCP came up after the restart." Do not re-show the kickoff roadmap.
+
+3. **If no log exists, re-survey live state in order:**
    - **MCP** — attempt a LaunchDarkly MCP tool call (e.g., `get-environments` or `list-feature-flags`). When it succeeds, state the result out loud ("MCP is connected."). Failure = MCP setup incomplete.
    - **SDK** — scan dependency files for a LaunchDarkly SDK package. Check for initialization code. When found, name the package and the init file in one line.
    - **Flag** — check for `variation()` or equivalent flag evaluation calls. When the search returns nothing, say so explicitly.
 
-3. **Resume rules (first incomplete step wins):**
+4. **Resume rules (first incomplete step wins):**
    - MCP probe failed for any reason → hand off to `mcp-configure` to resolve it.
    - MCP live, SDK missing → resume at Step 3. State: "MCP is live. Next: getting the SDK installed."
    - MCP live, SDK present, no flag → resume at Step 4. State: "You're connected and the SDK is installed. Creating your first flag now."
@@ -150,6 +152,9 @@ Create or refresh `LAUNCHDARKLY_ONBOARDING.md` silently at the repo root (or `do
 - **Commands run:** e.g. `npx skills add ...` (no secrets).
 - **Blockers / errors:** what failed and what was tried.
 - **Next step:** single explicit step name (e.g. "Create first feature flag").
+- **Resume phrase:** always include at the bottom: `To resume: say "continue LaunchDarkly onboarding"`
+
+**Before suggesting restart:** If you need to tell the user to restart their editor (e.g., MCP tools not appearing), **always update the log first** with the current state and next step. This ensures the agent can resume cleanly after restart.
 
 **Resuming:** If `LAUNCHDARKLY_ONBOARDING.md` already exists, read it first. Align with the stated **Next step** and only redo work the log marks incomplete or invalid. Show a shorter "where we are" summary instead of the full kickoff.
 
@@ -454,6 +459,8 @@ If they insist: respect it, note what was skipped, and state the dependency risk
 
 - **SDK already installed:** Skip Step 3 entirely. Before moving on, say so out loud in one user-facing line that names what you found and where (e.g. "I see `@launchdarkly/node-server-sdk` already in `package.json` and initialized in `src/launchdarkly.js` — skipping install."). Do not narrate "let's install the SDK," do not run install commands, do not re-explain what the SDK does. Verify the version is current and proceed directly to Step 4.
 - **MCP already configured:** Skip MCP setup in Step 2. Acknowledge it in one user-facing line ("MCP is already connected — using your existing configuration.") so the user knows why setup is being skipped. Call `get-project` to store keys, then continue.
+- **Deprecated mcp/aiconfigs found:** The `mcp/aiconfigs` URL is deprecated. Use a blocking question (via the `mcp-configure` skill) to ask the user before migrating to the unified `mcp/launchdarkly` server. Do not auto-migrate.
+- **Legacy mcp/fm found:** No migration needed — `mcp/fm` still works and mirrors the unified server. Do not suggest removing it.
 - **No supported agent detected:** Ask directly. Provide manual config instructions if needed.
 - **npx not available:** Provide manual skill installation (clone repo, copy skill directories).
 - **User only wants partial setup:** Respect the choice. State what's missing and what that limits.

@@ -21,12 +21,15 @@ This skill is nested under [LaunchDarkly onboarding](../SKILL.md); the parent sk
 
 ## Hosted MCP Servers
 
-LaunchDarkly provides two hosted MCP servers. For onboarding, only the feature management server is required.
+LaunchDarkly provides a unified hosted MCP server for all functionality:
 
-| Server             | URL                                          | Purpose              |
-| ------------------ | -------------------------------------------- | -------------------- |
-| Feature management | `https://mcp.launchdarkly.com/mcp/fm`        | Manage feature flags |
-| AI Configs         | `https://mcp.launchdarkly.com/mcp/aiconfigs` | Manage AI Configs    |
+| Server      | URL                                             | Purpose                       |
+| ----------- | ----------------------------------------------- | ----------------------------- |
+| LaunchDarkly (unified) | `https://mcp.launchdarkly.com/mcp/launchdarkly` | Feature flags and AgentControl |
+
+The legacy `mcp/fm` URL still works (it mirrors the unified server) — no migration is needed if the user has `mcp/fm` configured. Only the deprecated `mcp/aiconfigs` URL requires migration (see [Edge Cases](#edge-cases)).
+
+For onboarding, the unified server is all that's needed.
 
 ## Workflow
 
@@ -38,9 +41,7 @@ If the parent onboarding skill already identified the agent, use that context. O
 
 The fastest path is the quick install link. Present it to the user:
 
-**Feature management:** [https://mcp.launchdarkly.com/mcp/fm/install](https://mcp.launchdarkly.com/mcp/fm/install)
-
-**AI Configs (optional):** [https://mcp.launchdarkly.com/mcp/aiconfigs/install](https://mcp.launchdarkly.com/mcp/aiconfigs/install)
+**LaunchDarkly MCP:** [https://mcp.launchdarkly.com/mcp/launchdarkly/install](https://mcp.launchdarkly.com/mcp/launchdarkly/install)
 
 **Important: tell the user what to expect after clicking the link.** The install link may open in the browser, but the authorization or "add server" prompt typically appears **back in the coding environment** (the editor or host app where the agent runs), not in the browser. Immediately after presenting the link, include guidance like:
 
@@ -61,7 +62,7 @@ Locate the MCP config file for the detected agent and add the hosted server entr
 | GitHub Copilot | Repo **Settings** on GitHub.com → Copilot → Cloud agent → MCP (see [MCP UI links](references/mcp-ui-links.md)) |
 | Windsurf       | Agent-specific MCP config                                  |
 
-**Only add the feature management server for onboarding.** Add the AI Configs server only if the user explicitly needs it.
+**Add the unified LaunchDarkly server for onboarding.** This single server handles feature flags and AgentControl.
 
 ### Step 4: Agent-Specific Authorization
 
@@ -85,16 +86,27 @@ After writing the config, some agents need extra steps. **Do not** send users th
 
 - Click **Save** after adding the MCP configuration in repo settings. Use the [GitHub Copilot MCP doc](https://docs.github.com/en/copilot/customizing-copilot/extending-copilot-coding-agent-with-mcp) for the exact **Settings** path on github.com.
 
-### Step 5: Restart and Auto-Verify
+### Step 5: Verify MCP Tools (No Mandatory Restart)
 
-MCP tools are only available to the agent after a restart or refresh — newly added MCP servers do not appear mid-session.
+Restart is no longer required for Cursor or Claude Code after enabling an MCP server. Probe for tools immediately after the user confirms they've enabled and authorized the server.
 
-1. **Tell the user to enable the server and restart.** Before restarting, they need to make sure the MCP server is toggled on and authorized in their editor's MCP settings (e.g. in Cursor: toggle on the LaunchDarkly server and click **Connect**). Then restart or refresh the agent — be specific about how: "Restart Cursor" / "reload Claude Code" / "refresh the Copilot agent" depending on what you detected in Step 1. After the user restarts, the conversation will resume in a new turn.
-2. **On the next turn, probe silently.** Call a lightweight MCP tool (e.g. `list-feature-flags` with the user's project key). Do not ask the user whether MCP is working — just try it.
+1. **Tell the user to enable and authorize the server.** In Cursor: toggle on the LaunchDarkly server in MCP settings and click **Connect**. In Claude Code: the OAuth prompt appears on first tool call. Do **not** tell them to restart yet.
+
+2. **Probe immediately.** After the user confirms the server is enabled, call a lightweight MCP tool (e.g. `list-feature-flags` with the user's project key). Do not ask the user whether MCP is working — just try it.
    - **Success** (normal response, even an empty flag list): MCP is live. Note it in the onboarding log and continue.
-   - **Failure** (tool not found, auth error, timeout): fall back to ldcli/API. Note the fallback in the onboarding log. Do **not** block the rest of onboarding — Steps 5-6 must still be completable without MCP.
-3. **If the probe fails**, briefly tell the user MCP isn't available yet and that you'll use ldcli/API instead. Offer a one-liner they can try later to re-enable MCP (e.g. "You can set up MCP anytime by clicking [quick install link] and restarting").
-4. If the failure looks like a config issue (wrong file path, missing OAuth, server not enabled), mention the likely cause so the user can fix it on their own time — but do not block progress.
+   - **Failure** (tool not found, auth error, timeout): proceed to step 3.
+
+3. **If the probe fails, suggest a restart.** Before asking the user to restart:
+   - **Update the onboarding log** (`LAUNCHDARKLY_ONBOARDING.md`) with the current state and set **Next step** to "Verify MCP after restart".
+   - Tell the user: "The MCP tools aren't visible yet. Some editors need a restart to pick up new MCP servers. Restart your editor and say **'continue LaunchDarkly onboarding'** when you're back — I'll resume from here."
+   - Be specific about how to restart: "Restart Cursor" / "reload Claude Code" / "refresh the Copilot agent" depending on what you detected in Step 1.
+
+4. **On resume after restart:** The parent onboarding skill handles resume via the log file. When the next turn starts:
+   - Re-probe for MCP tools silently.
+   - If tools are now available: "MCP is connected." Continue with onboarding.
+   - If tools still missing: fall back to ldcli/API. Note the fallback in the onboarding log. Do **not** block the rest of onboarding — remaining steps must still be completable without MCP. Offer a one-liner to retry later: "You can set up MCP anytime by clicking [quick install link] and restarting."
+
+5. If the failure looks like a config issue (wrong file path, missing OAuth, server not enabled), mention the likely cause so the user can fix it on their own time — but do not block progress.
 
 For **local `npx` server** verification, see [MCP Config Templates — Verify (local server)](references/mcp-config-templates.md#verify-local-server).
 
@@ -129,17 +141,39 @@ Then ask how they want to add the token to the MCP config:
 
 ## Edge Cases
 
-- **User already has MCP configured:** Verify by checking for existing LD MCP entries in the config. If present and working, skip configuration.
+- **User already has MCP configured:** Verify by checking for existing LD MCP entries in the config. If the unified server (`mcp/launchdarkly`) or the legacy `mcp/fm` is present and working, skip configuration. If the deprecated `mcp/aiconfigs` is present, see below.
+- **User has the deprecated `mcp/aiconfigs` server:** This URL is deprecated. Do **not** auto-migrate. Use a blocking question:
+
+```json
+{
+  "questions": [
+    {
+      "id": "aiconfigs_migration",
+      "prompt": "I found the deprecated mcp/aiconfigs server in your config. It should be replaced with the unified LaunchDarkly server (mcp/launchdarkly), which handles both feature flags and AgentControl. Do you want me to migrate?",
+      "options": [
+        { "id": "yes", "label": "Yes, remove the old server and add the unified one" },
+        { "id": "no", "label": "No, leave it as is for now" }
+      ]
+    }
+  ]
+}
+```
+
+  - If **yes**: remove the `mcp/aiconfigs` entry, ensure the unified `mcp/launchdarkly` server is present (do not duplicate if it's already there), and continue.
+  - If **no**: note in the onboarding log that migration was declined. Continue with onboarding — the deprecated server may still work for now.
+
+- **User has the legacy `mcp/fm` server:** No migration needed — `mcp/fm` mirrors the unified server and continues to work. Do not suggest removing it.
 - **User has the old npx-based local server:** Migrate them. Remove the old `npx @launchdarkly/mcp-server` entry and any `LD_ACCESS_TOKEN` env vars. Replace with the hosted server config.
 - **Federal or EU instances:** The hosted MCP server is not available for federal or EU environments. Use [local MCP server docs](https://launchdarkly.com/docs/home/getting-started/mcp-local) and the **Local server via `npx`** section in [MCP Config Templates](references/mcp-config-templates.md). Follow the [Local MCP: Access Token Setup](#local-mcp-access-token-setup) flow for token handling.
-- **Agent not in known list:** Provide the generic pattern: the user needs to add an MCP server entry pointing to `https://mcp.launchdarkly.com/mcp/fm` using whatever format their agent expects.
+- **Agent not in known list:** Provide the generic pattern: the user needs to add an MCP server entry pointing to `https://mcp.launchdarkly.com/mcp/launchdarkly` using whatever format their agent expects.
 - **User opts out of MCP during onboarding:** Document that choice and continue with the parent skill's ldcli/API fallbacks for environments and flags; do not block SDK work.
 
 ## What NOT to Do
 
 - Don't configure the old npx-based local server by default. Prefer the hosted server for standard regions.
 - Don't ask for or store API keys for the hosted server. The hosted server uses OAuth.
-- Don't add both servers by default. Only add AI Configs if the user asks for it.
+- Don't auto-migrate from the deprecated `mcp/aiconfigs` — always ask via the blocking question.
+- Don't suggest restart as the first step — probe for tools immediately after the user enables the server.
 - Don't handle the access token for local MCP without asking the user first via the D4-LOCAL decision point.
 
 ## References
