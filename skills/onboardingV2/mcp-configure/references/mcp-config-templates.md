@@ -12,9 +12,11 @@ Use the unified server URL for new configurations:
 |--------|-----|---------|
 | LaunchDarkly (unified) | `https://mcp.launchdarkly.com/mcp/launchdarkly` | Feature flags and AgentControl |
 
-**Legacy URLs:**
-- `mcp/fm` — still works, mirrors the unified server. No migration needed.
-- `mcp/aiconfigs` — **deprecated**. Migrate to the unified server (see [mcp-configure Edge Cases](../SKILL.md#edge-cases)).
+**Legacy URLs (deprecated):**
+- `mcp/fm` — **deprecated**. Migrate to the unified server.
+- `mcp/aiconfigs` — **deprecated**. Migrate to the unified server.
+
+See [mcp-configure Edge Cases](../SKILL.md#edge-cases) for migration guidance.
 
 ## Cursor
 
@@ -33,7 +35,9 @@ Config file: `.cursor/mcp.json` in the project root.
 }
 ```
 
-### Legacy feature management only (still supported)
+### Legacy feature management only (deprecated)
+
+> **Deprecated:** `mcp/fm` is deprecated. Use the unified server URL above.
 
 ```json
 {
@@ -65,7 +69,9 @@ Config file: `.mcp.json` in the project root, or `~/.claude.json` for global con
 }
 ```
 
-### Legacy feature management only (still supported)
+### Legacy feature management only (deprecated)
+
+> **Deprecated:** `mcp/fm` is deprecated. Use the unified server URL above.
 
 ```json
 {
@@ -117,6 +123,36 @@ Windsurf uses a similar MCP configuration format. Add to the agent's MCP config:
 
 Consult Windsurf's documentation for the exact config file location.
 
+## Migrating from Deprecated mcp/fm
+
+The `mcp/fm` URL is deprecated. Replace it with the unified server.
+
+**Remove this:**
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly feature management": {
+      "url": "https://mcp.launchdarkly.com/mcp/fm",
+      "headers": {}
+    }
+  }
+}
+```
+
+**Replace with:**
+
+```json
+{
+  "mcpServers": {
+    "LaunchDarkly": {
+      "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
+      "headers": {}
+    }
+  }
+}
+```
+
 ## Migrating from Deprecated mcp/aiconfigs
 
 The `mcp/aiconfigs` URL is deprecated. Replace it with the unified server.
@@ -147,7 +183,7 @@ The `mcp/aiconfigs` URL is deprecated. Replace it with the unified server.
 }
 ```
 
-The unified server handles both feature flags and AgentControl. If you also had `mcp/fm`, you do not need to remove it — `mcp/fm` still works and mirrors the unified server.
+The unified server handles both feature flags and AgentControl. If you also had `mcp/fm`, migrate it to the unified server — `mcp/fm` is **deprecated** and will be removed.
 
 
 **Note:** Do not auto-migrate. Always ask the user via a blocking question before making changes (see [mcp-configure Edge Cases](../SKILL.md#edge-cases)).
