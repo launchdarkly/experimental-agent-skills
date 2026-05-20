@@ -475,8 +475,7 @@ If they insist: respect it, note what was skipped, and state the dependency risk
 
 - **SDK already installed:** Skip Step 3 entirely. Before moving on, say so out loud in one user-facing line that names what you found and where (e.g. "I see `@launchdarkly/node-server-sdk` already in `package.json` and initialized in `src/launchdarkly.js` — skipping install."). Do not narrate "let's install the SDK," do not run install commands, do not re-explain what the SDK does. Verify the version is current and proceed directly to Step 4.
 - **MCP already configured:** Skip MCP setup in Step 2. Acknowledge it in one user-facing line ("MCP is already connected — using your existing configuration.") so the user knows why setup is being skipped. Call `get-project` to store keys, then continue.
-- **Deprecated mcp/aiconfigs found:** The `mcp/aiconfigs` URL is deprecated. Use a blocking question (via the `mcp-configure` skill) to ask the user before migrating to the unified `mcp/launchdarkly` server. Do not auto-migrate.
-- **Legacy mcp/fm found:** No migration needed — `mcp/fm` still works and mirrors the unified server. Do not suggest removing it.
+- **Deprecated mcp/aiconfigs or mcp/fm found:** Both URLs are deprecated. Use a blocking question (via the `mcp-configure` skill) to ask the user before migrating to the unified `mcp/launchdarkly` server. Do not auto-migrate.
 - **No supported agent detected:** Ask directly. Provide manual config instructions if needed.
 - **npx not available:** Provide manual skill installation (clone repo, copy skill directories).
 - **User only wants partial setup:** Respect the choice. State what's missing and what that limits.

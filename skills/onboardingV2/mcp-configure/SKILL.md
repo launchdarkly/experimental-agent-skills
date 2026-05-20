@@ -27,7 +27,7 @@ LaunchDarkly provides a unified hosted MCP server for all functionality:
 | ----------- | ----------------------------------------------- | ----------------------------- |
 | LaunchDarkly (unified) | `https://mcp.launchdarkly.com/mcp/launchdarkly` | Feature flags and AgentControl |
 
-The legacy `mcp/fm` URL still works (it mirrors the unified server) — no migration is needed if the user has `mcp/fm` configured. Only the deprecated `mcp/aiconfigs` URL requires migration (see [Edge Cases](#edge-cases)).
+The legacy `mcp/fm` and `mcp/aiconfigs` URLs are **deprecated** — migrate any existing usage to the unified server (see [Edge Cases](#edge-cases)).
 
 For onboarding, the unified server is all that's needed.
 
@@ -149,15 +149,15 @@ Then ask how they want to add the token to the MCP config:
 
 ## Edge Cases
 
-- **User already has MCP configured:** Verify by checking for existing LD MCP entries in the config. If the unified server (`mcp/launchdarkly`) or the legacy `mcp/fm` is present and working, skip configuration. If the deprecated `mcp/aiconfigs` is present, see below.
-- **User has the deprecated `mcp/aiconfigs` server:** This URL is deprecated. Do **not** auto-migrate. Use a blocking question:
+- **User already has MCP configured:** Verify by checking for existing LD MCP entries in the config. If the unified server (`mcp/launchdarkly`) is present and working, skip configuration. If the deprecated `mcp/fm` or `mcp/aiconfigs` is present, see below.
+- **User has the deprecated `mcp/aiconfigs` or `mcp/fm` server:** These URLs are deprecated. Do **not** auto-migrate. Use a blocking question:
 
 ```json
 {
   "questions": [
     {
-      "id": "aiconfigs_migration",
-      "prompt": "I found the deprecated mcp/aiconfigs server in your config. It should be replaced with the unified LaunchDarkly server (mcp/launchdarkly), which handles both feature flags and AgentControl. Do you want me to migrate?",
+      "id": "legacy_migration",
+      "prompt": "I found a deprecated LaunchDarkly MCP URL in your config (mcp/fm or mcp/aiconfigs). It should be replaced with the unified LaunchDarkly server (mcp/launchdarkly), which handles both feature flags and AgentControl. Do you want me to migrate?",
       "options": [
         { "id": "yes", "label": "Yes, remove the old server and add the unified one" },
         { "id": "no", "label": "No, leave it as is for now" }
@@ -167,10 +167,8 @@ Then ask how they want to add the token to the MCP config:
 }
 ```
 
-  - If **yes**: remove the `mcp/aiconfigs` entry, ensure the unified `mcp/launchdarkly` server is present (do not duplicate if it's already there), and continue.
+  - If **yes**: remove the deprecated entry, ensure the unified `mcp/launchdarkly` server is present (do not duplicate if it's already there), and continue.
   - If **no**: note in the onboarding log that migration was declined. Continue with onboarding — the deprecated server may still work for now.
-
-- **User has the legacy `mcp/fm` server:** No migration needed — `mcp/fm` mirrors the unified server and continues to work. Do not suggest removing it.
 - **User has the old npx-based local server:** Migrate them. Remove the old `npx @launchdarkly/mcp-server` entry and any `LD_ACCESS_TOKEN` env vars. Replace with the hosted server config.
 - **Federal or EU instances:** The hosted MCP server is not available for federal or EU environments. Use [local MCP server docs](https://launchdarkly.com/docs/home/getting-started/mcp-local) and the **Local server via `npx`** section in [MCP Config Templates](references/mcp-config-templates.md). Follow the [Local MCP: Access Token Setup](#local-mcp-access-token-setup) flow for token handling.
 - **Agent not in known list:** Provide the generic pattern: the user needs to add an MCP server entry pointing to `https://mcp.launchdarkly.com/mcp/launchdarkly` using whatever format their agent expects.
@@ -180,7 +178,7 @@ Then ask how they want to add the token to the MCP config:
 
 - Don't configure the old npx-based local server by default. Prefer the hosted server for standard regions.
 - Don't ask for or store API keys for the hosted server. The hosted server uses OAuth.
-- Don't auto-migrate from the deprecated `mcp/aiconfigs` — always ask via the blocking question.
+- Don't auto-migrate from the deprecated `mcp/aiconfigs` or `mcp/fm` — always ask via the blocking question.
 - Don't suggest restart as the first step — probe for tools immediately after the user enables the server.
 - Don't suggest restart for auth errors (401/403) — the server was found, so a restart won't help. Guide the user to re-authorize instead.
 - Don't handle the access token for local MCP without asking the user first via the D4-LOCAL decision point.
