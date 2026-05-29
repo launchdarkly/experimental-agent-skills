@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-05-06T18:58:45.443Z",
+  "skills": {
+    "onboardingV2": {
+      "score": 78,
+      "passed": 4,
+      "total": 6,
+      "status": "failing",
+      "lastCommit": "bf80085",
+      "lastRun": "2026-05-06T18:54:47.733Z",
+      "perTest": [
+        {
+          "description": "Kickoff: full kickoff arc has welcome + roadmap + account_status question, no premature credential asks, no leaked internal labels",
+          "pass": true,
+          "score": 1
+        },
+        {
+          "description": "Monorepo: stops to ask which package to integrate using the app_location form, does not silently pick one",
+          "pass": true,
+          "score": 0.909
+        },
+        {
+          "description": "Skips Step 3 (SDK install) when SDK is already installed and initialized, hands off to first flag",
+          "pass": true,
+          "score": 1
+        },
+        {
+          "description": "Resume from live state: re-surveys silently, lands on Step 4 (first flag), does not restart kickoff",
+          "pass": false,
+          "score": 0.438
+        },
+        {
+          "description": "First flag (Step 4): creates kebab-case boolean flag, gates toggle behind off_state_confirmed ask-question, no premature targeting",
+          "pass": true,
+          "score": 0.953
+        },
+        {
+          "description": "Narrative quality: full-mode arc narrates plan upfront, states progress along the way, names value at completion, and signals done",
+          "pass": false,
+          "score": 0.357
+        }
+      ]
+    }
+  }
+}

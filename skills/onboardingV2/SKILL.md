@@ -479,4 +479,3 @@ If they insist: respect it, note what was skipped, and state the dependency risk
 - **No supported agent detected:** Ask directly. Provide manual config instructions if needed.
 - **npx not available:** Provide manual skill installation (clone repo, copy skill directories).
 - **User only wants partial setup:** Respect the choice. State what's missing and what that limits.
-- **Federal or EU instance:** Hosted MCP not available. Direct to local MCP server docs.
