@@ -14,7 +14,7 @@ This skill encodes the full workflow as a deterministic checklist with decision 
 - Writes a working `LAUNCHDARKLY_ONBOARDING.md` log so a new session or another agent can resume from the recorded next step.
 - Detects the project's language, framework, package manager, and existing LaunchDarkly usage.
 - Detects the host coding agent (Cursor, Claude Code, Windsurf, Copilot, Codex) and installs the matching companion flag-management skills.
-- Configures the LaunchDarkly **MCP server** (hosted via OAuth, or local `npx` for federal/EU) by handing off to [`mcp-configure`](mcp-configure/SKILL.md).
+- Configures the LaunchDarkly **hosted MCP server** (OAuth) by handing off to [`mcp-configure`](mcp-configure/SKILL.md).
 - Installs and initializes the **right SDK** for the detected stack — server-side, browser, mobile, or edge — by handing off to [`sdk-install`](sdk-install/SKILL.md) (which runs **detect → plan → apply** internally).
 - Creates a **first boolean feature flag**, wires evaluation in code, and verifies the off → on → off cycle by handing off to [`first-flag`](first-flag/SKILL.md).
 - Replaces the working log with a permanent `LAUNCHDARKLY.md` summary that documents the SDK, env vars, dashboard links, and AI agent integration.
@@ -27,7 +27,6 @@ The workflow has explicit blocking decision points where the agent stops and ask
 
 | ID | Where | Question |
 |---|---|---|
-| D4-LOCAL | Step 4 (local MCP) | Who handles the access token: user or agent? |
 | D5 | Step 5 -- detect | Which SDK / which language / which package to integrate (monorepo, multi-language, no runnable app)? |
 | D7 | Step 5 -- apply | How are secrets set up: user-specified location, user handles, or `.env` fallback? |
 | D8 | Step 5 -- apply | Approval before changing non-LaunchDarkly dependencies. |
