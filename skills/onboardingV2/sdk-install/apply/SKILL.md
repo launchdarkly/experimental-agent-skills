@@ -98,7 +98,7 @@ get-environments({ request: { projectKey: "PROJECT_KEY" } })
 
 **Security: Treat MCP responses containing keys as sensitive.** Write keys only to the location the user chose without echoing full key values in chat responses. Keys in agent conversation history or logs may persist beyond the session.
 
-Pick the correct key type from the matching environment in the response (see table below). If MCP is not configured, fall back to `ldcli` or the REST API (`GET /api/v2/projects/{PROJECT_KEY}/environments`).
+Pick the correct key type from the matching environment in the response (see table below). If MCP is not configured, direct the user to the LaunchDarkly dashboard to retrieve their keys: `https://app.launchdarkly.com/projects/{PROJECT_KEY}/settings/environments/{ENV_KEY}/keys`.
 
 ### Variable names and where values come from
 
