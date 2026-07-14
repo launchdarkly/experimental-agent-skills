@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Measures the "new interaction model" modules independently so we get per-direction conclusions.
+# Run against baseline (committed onboardingV2) and candidate (use-variant.sh) and compare.
+description: "onboardingV2 interaction-model eval (engage / quiet / default-opt-out / MCP-deferred)"
+
+prompts:
+  - file://../../skills/onboardingV2/SKILL.md
+
+providers:
+  - id: file://../providers/claude-skill-agent-sdk.js
+    label: onboardingV2
+    config:
+      skill_slug: onboardingV2
+      allow_builtins: false
+      expose_mcp_tools: true
+      expose_ask_question: true
+      force_skill_invocation: true
+
+tests:
+  - description: "Interaction model (clear app kickoff)"
+    vars:
+      user_request: "Set up LaunchDarkly in my project."
+      codebase_context: "Node.js + Express app, npm, single package, src/index.js entrypoint. No existing LaunchDarkly."
+      max_turns: 6
+      mock_ask_question_answers:
+        - ["skip"]
+        - ["Sounds good"]
+        - ["self"]
+        - ["confirmed"]
+    assert:
+      # M2 — engage immediately: greeted before any tool, and first decision comes early
+      - type: javascript
+        value: |
+          const traj = output.trajectory || [];
+          const greeted = !!(output.kickoff_text && output.kickoff_text.trim().length > 0);
+          const firstAq = traj.find(t => String(t.tool).includes('ask-question'));
+          const earlyTurn = firstAq ? firstAq.turn <= 2 : false;
+          return { pass: greeted && earlyTurn, score: (greeted?0.5:0)+(earlyTurn?0.5:0),
+                   reason: 'greeted='+greeted+' firstAskTurn='+(firstAq?firstAq.turn:'none') };
+        metric: m2_engage_immediately
+        weight: 2
+      # informational verbosity counter (weight 0): turns + total assistant chars (lower = quieter)
+      - type: javascript
+        value: |
+          const turns = output.assistant_turns || [];
+          const chars = turns.reduce((n,t)=>n+(t.text?t.text.length:0),0);
+          return { pass: true, score: 1, reason: 'assistant_turns='+turns.length+' total_chars='+chars };
+        metric: verbosity_counter
+        weight: 0
+      # M1 — quiet execution
+      - type: llm-rubric
+        value: |
+          Evaluate `assistant_turns` (every message the agent emitted). Score 1.0 if the agent works QUIETLY —
+          speaking only to greet, at a genuine decision point, and at completion — with NO play-by-play narration
+          of routine work and NO prose wedged between execution steps, and no progress block on every turn.
+          Deduct heavily for "now I'll do X / I just did Y" narration at each step. Few, short messages = good.
+        metric: m1_quiet_execution
+        weight: 3
+      # M3 — smart default + single opt-out (not open menus)
+      - type: llm-rubric
+        value: |
+          Look at the decision points the agent presented (its `ask-question` calls + `assistant_turns`). Score 1.0
+          if decisions are framed as a recommended default with a single easy opt-out (e.g. "I'll do X — [Sounds good]
+          [I'd rather do it myself]"), rather than open multi-option menus that ask the user to choose things they
+          can't knowledgeably evaluate. Deduct for open-ended questions requiring LaunchDarkly expertise to answer.
+        metric: m3_default_optout
+        weight: 2
+      # M5 — MCP kept off the critical path
+      - type: llm-rubric
+        value: |
+          Score 1.0 if MCP setup is NOT on the path to the first flag — the agent does not require or prompt an
+          "set up MCP now?" decision before getting the user to a working flag (MCP may be offered later/optionally).
+          Deduct if an MCP setup gate appears before the first-flag value.
+        metric: m5_mcp_not_frontloaded
+        weight: 2
