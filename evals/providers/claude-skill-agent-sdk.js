@@ -460,7 +460,11 @@ class ClaudeSkillAgentSdk {
       allowedMcpToolNames.push("mcp__harness-ux__ask-question");
     }
 
-    const agentTools = this.allowBuiltins ? undefined : allowedMcpToolNames;
+    // Always expose the built-in `Skill` tool so the agent can actually load the
+    // SKILL.md body (via the forced `/<slug>` slash command or on-demand). Without
+    // it, lean mode (allow_builtins:false) lists the skill but can never read it,
+    // so the eval silently runs the base model. Action tools stay restricted.
+    const agentTools = this.allowBuiltins ? undefined : ["Skill", ...allowedMcpToolNames];
 
     // Harness system prompt. Strictly load-bearing mechanics only:
     //   1. Frame the run (eval mode, skill preloaded) so the model
@@ -508,6 +512,11 @@ class ClaudeSkillAgentSdk {
     const queryOptions = {
       cwd,
       settingSources: ["project"],
+      // Turn skills ON for the main session. AgentDefinition.skills (below) only
+      // preloads for subagents; the main thread agent needs this top-level option
+      // or the SKILL.md body is never injected. Without it the eval silently runs
+      // the base model with no skill loaded.
+      skills: [this.skillSlug],
       mcpServers: mcpServersMap,
       model: MODEL,
       maxTurns,
@@ -539,7 +548,9 @@ class ClaudeSkillAgentSdk {
     };
 
     if (!this.allowBuiltins) {
-      queryOptions.tools = [];
+      // Keep the Skill tool at the session level so the skill body can load;
+      // everything else (Bash/Read/Edit/...) stays off for a fast routing eval.
+      queryOptions.tools = ["Skill"];
     }
 
     let finalText = "";
