@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Verbosity loop for the M1 (quiet) candidate. total_chars = how much the agent talks (lower=quieter);
+# kept_essentials = guardrail so we don't trim the payoff/first-choice away.
+description: "onboardingV2 verbosity loop (clear app kickoff)"
+prompts:
+  - file://../../skills/onboardingV2/SKILL.md
+providers:
+  - id: file://../providers/claude-skill-agent-sdk.js
+    config:
+      skill_slug: onboardingV2
+      allow_builtins: false
+      expose_mcp_tools: true
+      expose_ask_question: true
+      force_skill_invocation: true
+tests:
+  - description: "Verbosity (clear app kickoff)"
+    vars:
+      user_request: "Set up LaunchDarkly in my project."
+      codebase_context: "Node.js + Express app, npm, single package, src/index.js. No existing LaunchDarkly."
+      max_turns: 6
+      mock_ask_question_answers:
+        - ["skip"]
+        - ["Sounds good"]
+        - ["self"]
+        - ["confirmed"]
+    assert:
+      - type: javascript
+        value: |
+          const turns = output.assistant_turns || [];
+          const chars = turns.reduce((n,t)=>n+(t.text?t.text.length:0),0);
+          return { pass: true, score: 1, reason: 'turns=' + turns.length + ' chars=' + chars };
+        metric: total_chars
+        weight: 0
+      - type: llm-rubric
+        value: |
+          Evaluate `kickoff_text` (the opening). Score 1.0 ONLY if it still (a) leads with the payoff — flip a
+          switch / change the app with no redeploy — and (b) offers the user a clear way to proceed. This guards
+          against over-trimming: an opener that drops the payoff or the first choice fails.
+        metric: kept_essentials
+        weight: 1

@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Real eval of the SHIPPING onboarding skill, onboardingV2 (the skill gonfalon points users to).
+# Run: pnpm exec promptfoo eval -c shared/defaults.yaml -c onboardingv2/promptfooconfig.yaml --env-file .env --no-cache
+#
+# Loads the skill for real via the provider fix (top-level `skills` + `Skill` tool). Lean mode
+# (allow_builtins:false) keeps runs fast — the agent produces the scripted conversation using the
+# mocked LD tools + ask-question, without running a real 50-turn install. force_skill_invocation
+# makes the SKILL.md body actually load. max_turns is capped per test so we score the kickoff +
+# first decision points (where the "clunky / inconsistent" reports live), not a full run.
+description: "onboardingV2 (shipping skill) — kickoff + early-decision UX eval"
+
+prompts:
+  - file://../../skills/onboardingV2/SKILL.md
+
+providers:
+  - id: file://../providers/claude-skill-agent-sdk.js
+    label: onboardingV2
+    config:
+      skill_slug: onboardingV2
+      allow_builtins: false
+      expose_mcp_tools: true
+      expose_ask_question: true
+      force_skill_invocation: true
+
+tests:
+  # ----------------------------------------------------------------------
+  # T0 — Happy-path kickoff (clear app). Per the skill's Kickoff: open with a
+  # 1-sentence welcome + the payoff (flip a switch, no redeploy), show the
+  # roadmap, then ask the first decision via the tool. No internal leak.
+  # ----------------------------------------------------------------------
+  - description: "Kickoff (clear app): payoff-led opener, roadmap, asks via tool, no leak"
+    vars:
+      user_request: "Set up LaunchDarkly in my project."
+      codebase_context: "Node.js + Express app, npm, single package, src/index.js entrypoint. No existing LaunchDarkly."
+      max_turns: 6
+      mock_ask_question_answers:
+        - ["skip"]
+        - ["manual"]
+        - ["self"]
+    assert:
+      - type: javascript
+        value: |
+          const tools = output.tools_called || [];
+          const pass = tools.some(t => String(t).includes('ask-question'));
+          return { pass, score: pass ? 1 : 0, reason: 'tools: ' + (tools.join(' -> ') || '(none)') };
+        metric: asks_via_tool
+        weight: 3
+      - type: llm-rubric
+        value: |
+          Evaluate `kickoff_text` (everything before the first tool call) against onboardingV2's Kickoff rules.
+          Score 1.0 if ALL hold, deduct ~0.25 each:
+          1. Opens with a brief welcome and LEADS WITH THE PAYOFF — flipping a switch / changing the app
+             with no redeploy — rather than narrating internal process. Opening is concise (≈2 sentences).
+          2. Gives the user a short orientation/roadmap of what's coming (the setup stages).
+          3. Tone is direct, warm, confident (Reliable Maverick); short sentences.
+          4. Leaks NO internal machinery: no step labels ("Step 0/1/2"), skill/file names, or workflow
+             jargon ("nested skill", "hand off", "BLOCKING", "Experience Detection").
+          If `kickoff_text` is empty, score 0.
+        metric: kickoff_quality
+        weight: 3
+
+  # ----------------------------------------------------------------------
+  # T1 — Monorepo (Step 1 "Unclear"). The skill says: do NOT guess which
+  # package; present an AskQuestion with one option per candidate package.
+  # ----------------------------------------------------------------------
+  - description: "Monorepo: asks which package (does not guess)"
+    vars:
+      user_request: "Add LaunchDarkly to my project."
+      codebase_context: "pnpm workspace monorepo with packages/web (Next.js), packages/api (Express), packages/shared. No existing LaunchDarkly."
+      max_turns: 5
+      mock_ask_question_answers:
+        - ["packages/web"]
+        - ["skip"]
+    assert:
+      - type: javascript
+        value: |
+          const aq = (output.trajectory || []).find(t => String(t.tool).includes('ask-question'));
+          if (!aq) return { pass: false, score: 0, reason: 'no ask-question call' };
+          const opts = (aq.arguments && aq.arguments.options) || [];
+          const text = opts.map(o => (o.label||'')+' '+(o.id||'')).join(' | ').toLowerCase();
+          const mentionsPkgs = (text.match(/packages\//g) || []).length;
+          const pass = opts.length >= 2 && mentionsPkgs >= 2;
+          return { pass, score: pass ? 1 : 0, reason: opts.length + ' options; packages/ mentions=' + mentionsPkgs + ' || ' + text.slice(0,160) };
+        metric: asks_which_package
+        weight: 3
+      - type: llm-rubric
+        value: |
+          The project is a multi-package monorepo. Per onboardingV2 Step 1, the agent must NOT guess which
+          package to integrate — it should ask the user to choose among the candidate packages. Evaluate
+          `kickoff_text` + the first question: does it surface the ambiguity and ask, rather than assuming
+          one package? Score 1.0 if it clearly asks the user to pick; 0 if it just picks one and proceeds.
+        metric: no_guess_on_monorepo
+        weight: 2
+
+  # ----------------------------------------------------------------------
+  # T2 — Drift. User tries to skip the flow. onboardingV2 "Redirects drift."
+  # ----------------------------------------------------------------------
+  - description: "Drift: redirects a skip-ahead request gracefully"
+    vars:
+      user_request: "Skip the setup — just give me the code to wrap my checkout button in a flag."
+      codebase_context: "Next.js app, TypeScript, npm."
+      max_turns: 4
+      mock_ask_question_answers:
+        - ["skip"]
+    assert:
+      - type: llm-rubric
+        value: |
+          Evaluate `kickoff_text` + `response`. The user asked to skip onboarding. Per onboardingV2's drift
+          handling, the agent should acknowledge the request, name in one sentence what finishing the quick
+          setup gives them (or what skipping risks), and steer back or proceed deliberately — NOT silently
+          dump code, and NOT rigidly refuse. Score 1.0 if it redirects warmly with the tradeoff stated;
+          deduct for silent compliance, rigid refusal, or no tradeoff mentioned.
+        metric: handles_drift
+        weight: 2

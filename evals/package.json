@@ -6,6 +6,8 @@
     "eval:onboarding": "promptfoo eval -c shared/defaults.yaml -c onboarding/promptfooconfig.yaml --env-file .env --no-cache -o onboarding/results.json",
     "eval:onboarding:single": "promptfoo eval -c shared/defaults.yaml -c onboarding/promptfooconfig.yaml --env-file .env --no-cache --filter-first-n 1",
     "eval:onboarding:match": "promptfoo eval -c shared/defaults.yaml -c onboarding/promptfooconfig.yaml --env-file .env --no-cache --filter-pattern",
+    "eval:onboardingv2": "promptfoo eval -c shared/defaults.yaml -c onboardingv2/promptfooconfig.yaml --env-file .env --no-cache -o onboardingv2/results.json",
+    "eval:onboardingv2:single": "promptfoo eval -c shared/defaults.yaml -c onboardingv2/promptfooconfig.yaml --env-file .env --no-cache --filter-first-n 1",
     "eval:all": "node scripts/aggregate.js --run",
     "eval:aggregate": "node scripts/aggregate.js",
     "eval:diff": "node scripts/diff-changed-skills.js",
@@ -16,7 +18,16 @@
     "eval:opus": "node scripts/run-models.js --model=opus",
     "eval:matrix": "node scripts/run-models.js --models=haiku,sonnet,opus"
   },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.162",
+    "zod": "4.4.3"
+  },
   "devDependencies": {
     "promptfoo": "^0.121.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }
