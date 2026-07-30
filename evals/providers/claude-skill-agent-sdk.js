@@ -124,7 +124,7 @@
  *                                     "src/server.js": "const express = require('express')"
  *
  * Environment variables:
- *   AGENT_MODEL          - SUT model (default claude-sonnet-4-20250514).
+ *   AGENT_MODEL          - SUT model (default claude-sonnet-4-6).
  *   ANTHROPIC_API_KEY    - Auth for the SDK's child Claude Code process.
  *   SKILL_EVAL_DEBUG=1   - Dump every SDK message to
  *                          <fixture-cwd>/_debug-messages.json for the
@@ -144,7 +144,7 @@ const DEFAULT_MAX_TURNS = 15;
 const MODEL =
   process.env.AGENT_MODEL ||
   process.env.EVAL_MODEL ||
-  "claude-sonnet-4-20250514";
+  "claude-sonnet-4-6";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SKILLS_ROOT = path.join(REPO_ROOT, "skills");
