@@ -23,7 +23,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "promptfoo": "^0.121.0"
+    "promptfoo": "^0.121.18"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
