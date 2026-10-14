@@ -16,14 +16,14 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.162
-        version: 0.3.162(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.162(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))(zod@4.4.3)
       zod:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       promptfoo:
         specifier: ^0.121.0
-        version: 0.121.15(@types/json-schema@7.0.15)(@types/node@25.9.3)(pg@8.21.0)(playwright-core@1.60.0)(socks@2.8.9)
+        version: 0.121.15(@types/json-schema@7.0.15)(@types/node@25.9.3)(debug@4.3.4)(pg@8.21.0)(playwright-core@1.60.0)(socks@2.8.9)
 
 packages:
 
@@ -919,8 +919,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@modelcontextprotocol/sdk@1.29.0':
-    resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
+  '@modelcontextprotocol/sdk@1.32.1':
+    resolution: {integrity: sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -3627,10 +3627,10 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.162':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.150(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)':
+  '@anthropic-ai/claude-agent-sdk@0.3.150(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.104.1(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.150
@@ -3643,10 +3643,10 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.150
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.162(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)':
+  '@anthropic-ai/claude-agent-sdk@0.3.162(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.104.1(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.162
@@ -4647,7 +4647,7 @@ snapshots:
   '@libsql/win32-x64-msvc@0.5.29':
     optional: true
 
-  '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.32.1(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.25)
       ajv: 8.20.0
@@ -4730,7 +4730,7 @@ snapshots:
       debug: 4.4.3
       openai: 6.42.0(ws@8.21.0)(zod@4.4.3)
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -5004,7 +5004,7 @@ snapshots:
   '@slack/types@2.21.1':
     optional: true
 
-  '@slack/web-api@7.17.0':
+  '@slack/web-api@7.17.0(debug@4.3.4)':
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/types': 2.21.1
@@ -6877,7 +6877,7 @@ snapshots:
 
   promise-limit@2.7.0: {}
 
-  promptfoo@0.121.15(@types/json-schema@7.0.15)(@types/node@25.9.3)(pg@8.21.0)(playwright-core@1.60.0)(socks@2.8.9):
+  promptfoo@0.121.15(@types/json-schema@7.0.15)(@types/node@25.9.3)(debug@4.3.4)(pg@8.21.0)(playwright-core@1.60.0)(socks@2.8.9):
     dependencies:
       '@anthropic-ai/sdk': 0.104.1(zod@4.4.3)
       '@apidevtools/json-schema-ref-parser': 15.3.6(@types/json-schema@7.0.15)
@@ -6958,7 +6958,7 @@ snapshots:
       ws: 8.21.0
       zod: 4.4.3
     optionalDependencies:
-      '@anthropic-ai/claude-agent-sdk': 0.3.150(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@anthropic-ai/claude-agent-sdk': 0.3.150(@anthropic-ai/sdk@0.104.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))(zod@4.4.3)
       '@aws-sdk/client-bedrock-agent-runtime': 3.1067.0
       '@aws-sdk/client-bedrock-runtime': 3.1067.0
       '@aws-sdk/client-s3': 3.1067.0
@@ -6974,13 +6974,13 @@ snapshots:
       '@huggingface/transformers': 4.2.0
       '@ibm-cloud/watsonx-ai': 1.7.13
       '@ibm-generative-ai/node-sdk': 3.2.4
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.4.3)
       '@openai/agents': 0.11.6(ws@8.21.0)(zod@4.4.3)
       '@openai/codex-sdk': 0.130.0
       '@opencode-ai/sdk': 1.17.3
       '@playwright/browser-chromium': 1.60.0
       '@rollup/rollup-linux-x64-gnu': 4.61.1
-      '@slack/web-api': 7.17.0
+      '@slack/web-api': 7.17.0(debug@4.3.4)
       '@smithy/node-http-handler': 4.7.7
       '@swc/core': 1.15.41
       '@swc/core-darwin-arm64': 1.15.41
