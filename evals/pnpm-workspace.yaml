@@ -10,3 +10,4 @@ overrides:
   hono: ">=4.12.21"
   qs: ">=6.15.2"
   "@anthropic-ai/sdk": ">=0.91.1"
+  "@simple-git/argv-parser@<2.0.1": "2.0.1"
