@@ -7,7 +7,7 @@ allowBuilds:
   sharp: set this to true or false
 overrides:
   "axios@<1.20.0": "1.20.0"
-  "hono@<4.13.5": "4.13.5"
+  "hono@<4.13.7": "4.13.7"
   "qs@<6.16.0": "6.16.0"
   "@anthropic-ai/sdk": ">=0.91.1"
   "@hono/node-server@<1.19.15": "1.19.15"
